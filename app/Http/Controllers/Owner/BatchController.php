@@ -1,0 +1,285 @@
+<?php
+
+namespace App\Http\Controllers\Owner;
+
+use App\Http\Controllers\Controller;
+use App\Models\{Batch, Country, GoGroup, Invoice, Order, OrderItem, User, Warehouse};
+use App\Notifications\InvoiceCreatedNotification;
+use App\Services\{BatchTrackingService, OrderStatusService};
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
+
+class BatchController extends Controller
+{
+    public function index(Request $request)
+    {
+        $query = trim((string) $request->query('q', ''));
+
+        $batches = Batch::with(['country', 'goGroup', 'warehouse'])
+            ->when($query !== '', fn ($q) => $q->where(function ($sub) use ($query) {
+                $sub->where('code', 'like', '%' . $query . '%')
+                    ->orWhere('name', 'like', '%' . $query . '%')
+                    ->orWhere('tracking_number', 'like', '%' . $query . '%');
+            }))
+            ->latest()
+            ->paginate(20)
+            ->withQueryString();
+
+        return view('owner.batches.index', compact('batches'));
+    }
+
+    public function create()
+    {
+        return view('owner.batches.form', [
+            'countries' => Country::where('active', true)->orderBy('name')->get(),
+            'groups' => GoGroup::where('status', 'active')->orderBy('name')->get(),
+            'warehouses' => Warehouse::with('country')->where('active', true)->orderBy('code')->get(),
+        ]);
+    }
+
+    public function store(Request $request, BatchTrackingService $tracking)
+    {
+        $data = $this->validateBatch($request);
+        $country = Country::where('active', true)->findOrFail($data['country_id']);
+
+        $batch = DB::transaction(function () use ($data, $country, $tracking) {
+            $batch = Batch::create([
+                'go_group_id' => $data['go_group_id'] ?? null,
+                'country_id' => $country->id,
+                'warehouse_id' => $data['warehouse_id'] ?? null,
+                'code' => Batch::generateCode($country->code),
+                'name' => trim($data['name']),
+                'description' => $data['description'] ?? null,
+                'tracking_number' => $data['tracking_number'] ?? null,
+                'status' => 'ordered',
+            ]);
+
+            $tracking->sync($batch);
+
+            return $batch;
+        });
+
+        return redirect()
+            ->route('owner.batches.show', $batch)
+            ->with('success', 'Batch ' . $batch->code . ' berhasil dibuat.');
+    }
+
+    public function show(Batch $batch, BatchTrackingService $tracking)
+    {
+        if (!\App\Models\Shipment::where('source_type', 'batch')->where('source_id', $batch->id)->exists()) {
+            $tracking->sync($batch->loadMissing(['country', 'orders.items']));
+        }
+
+        $batch->load([
+            'country',
+            'goGroup',
+            'warehouse',
+            'shipment',
+            'orders.customer.customerProfile',
+            'orders.items',
+            'orders.invoices',
+            'orders.adjustments.invoice.customer',
+        ]);
+
+        $customers = User::where('role', 'customer')
+            ->where('active', true)
+            ->orderBy('name')
+            ->get();
+
+        return view('owner.batches.show', compact('batch', 'customers'));
+    }
+
+    public function addOrder(Request $request, Batch $batch, BatchTrackingService $tracking)
+    {
+        $data = $request->validate([
+            'customer_id' => [
+                'nullable',
+                Rule::exists('users', 'id')->where(fn ($q) => $q->where('role', 'customer')->where('active', true)),
+            ],
+            'customer_name' => ['nullable', 'required_without:customer_id', 'string', 'max:120'],
+            'customer_username' => ['nullable', 'string', 'max:100'],
+            'customer_whatsapp' => ['nullable', 'string', 'max:30'],
+            'customer_line' => ['nullable', 'string', 'max:100'],
+            'item_name' => ['required', 'string', 'max:180'],
+            'details' => ['nullable', 'string', 'max:180'],
+            'description_type' => ['required', 'string', 'max:100'],
+            'qty' => ['required', 'integer', 'min:1', 'max:999'],
+            'invoice_type' => ['nullable', 'required_with:invoice_amount', 'in:full,dp,cicilan,pelunasan,kenaikan,penyesuaian'],
+            'invoice_amount' => ['nullable', 'integer', 'min:1'],
+            'deadline_at' => ['nullable', 'date'],
+        ]);
+
+        if (empty($data['customer_id'])) {
+            $hasContact = filled($data['customer_username'] ?? null)
+                || filled($data['customer_whatsapp'] ?? null)
+                || filled($data['customer_line'] ?? null);
+
+            if (!$hasContact) {
+                throw ValidationException::withMessages([
+                    'customer_name' => 'Customer baru perlu minimal satu identitas kontak: username, WhatsApp, atau LINE.',
+                ]);
+            }
+        }
+
+        $invoice = null;
+
+        DB::transaction(function () use ($data, $batch, $tracking, &$invoice) {
+            $customerId = $data['customer_id'] ?? null;
+
+            if (!$customerId) {
+                $identity = implode('|', [
+                    mb_strtolower(trim($data['customer_name'])),
+                    mb_strtolower(trim((string) ($data['customer_username'] ?? ''))),
+                    preg_replace('/\s+/', '', (string) ($data['customer_whatsapp'] ?? '')),
+                    mb_strtolower(trim((string) ($data['customer_line'] ?? ''))),
+                ]);
+
+                $email = 'legacy+' . substr(sha1($identity), 0, 24) . '@placeholder.local';
+                $user = User::where('email', $email)->first();
+
+                if (!$user) {
+                    $user = User::create([
+                        'name' => trim($data['customer_name']),
+                        'email' => $email,
+                        'password' => null,
+                        'role' => 'customer',
+                        'active' => true,
+                    ]);
+
+                    $user->customerProfile()->create([
+                        'legacy_name' => trim($data['customer_name']),
+                        'username' => $data['customer_username'] ?? null,
+                        'whatsapp' => $data['customer_whatsapp'] ?? null,
+                        'line_id' => $data['customer_line'] ?? null,
+                        'source_channel' => filled($data['customer_line'] ?? null)
+                            ? 'line'
+                            : (filled($data['customer_whatsapp'] ?? null) ? 'whatsapp' : 'other'),
+                    ]);
+                }
+
+                $customerId = $user->id;
+            }
+
+            $order = Order::create([
+                'customer_id' => $customerId,
+                'go_group_id' => $batch->go_group_id,
+                'batch_id' => $batch->id,
+                'source_type' => 'batch',
+                'order_number' => $this->generateUniqueNumber('ORD-B'),
+                'status' => $batch->status,
+                'currency_code' => $batch->country->currency_code,
+                'notes' => 'Input manual Batch ' . $batch->code,
+            ]);
+
+            OrderItem::create([
+                'order_id' => $order->id,
+                'item_name' => trim($data['item_name']),
+                'details' => $data['details'] ?? null,
+                'description_type' => trim($data['description_type']),
+                'qty' => $data['qty'],
+            ]);
+
+            if (!empty($data['invoice_amount'])) {
+                $invoice = Invoice::create([
+                    'customer_id' => $customerId,
+                    'order_id' => $order->id,
+                    'invoice_number' => $this->generateUniqueNumber('INV'),
+                    'type' => $data['invoice_type'] ?? 'pelunasan',
+                    'amount' => $data['invoice_amount'],
+                    'deadline_at' => $data['deadline_at'] ?? null,
+                    'status' => 'unpaid',
+                ]);
+            }
+
+            $tracking->sync($batch->fresh(['country', 'orders.items']));
+        });
+
+        if ($invoice) {
+            $invoice->load('customer');
+            $invoice->customer?->notify(new InvoiceCreatedNotification($invoice));
+        }
+
+        return back()->with('success', 'Order customer berhasil ditambahkan ke Batch.');
+    }
+
+    public function updateStatus(
+        Request $request,
+        Batch $batch,
+        OrderStatusService $statusService,
+        BatchTrackingService $tracking
+    ) {
+        $data = $request->validate([
+            'status' => ['required', Rule::in(OrderStatusService::statuses())],
+            'tracking_number' => ['nullable', 'string', 'max:180'],
+        ]);
+
+        DB::transaction(function () use ($data, $batch, $request, $statusService, $tracking) {
+            $batch->update([
+                'status' => $data['status'],
+                'tracking_number' => $data['tracking_number'] ?? $batch->tracking_number,
+                'arrived_gbu_at' => $data['status'] === 'arrived_gbu' && !$batch->arrived_gbu_at
+                    ? now()
+                    : $batch->arrived_gbu_at,
+            ]);
+
+            $batch->load('orders.customer');
+            foreach ($batch->orders as $order) {
+                $statusService->update(
+                    $order,
+                    $data['status'],
+                    $request->user()->id,
+                    'Update melalui Batch ' . $batch->code
+                );
+            }
+
+            $tracking->sync($batch->fresh(['country', 'orders.items']));
+        });
+
+        return back()->with('success', 'Status Batch, order, dan tracking diperbarui.');
+    }
+
+    private function validateBatch(Request $request): array
+    {
+        $countryId = $request->input('country_id');
+
+        return $request->validate([
+            'name' => ['required', 'string', 'max:160'],
+            'country_id' => [
+                'required',
+                Rule::exists('countries', 'id')->where(fn ($q) => $q->where('active', true)),
+            ],
+            'go_group_id' => [
+                'nullable',
+                Rule::exists('go_groups', 'id')->where(fn ($q) => $q->where('status', 'active')),
+            ],
+            'warehouse_id' => [
+                'nullable',
+                Rule::exists('warehouses', 'id')->where(function ($q) use ($countryId) {
+                    $q->where('active', true);
+                    if ($countryId) {
+                        $q->where('country_id', $countryId);
+                    }
+                }),
+            ],
+            'description' => ['nullable', 'string', 'max:1000'],
+            'tracking_number' => ['nullable', 'string', 'max:180'],
+        ], [
+            'warehouse_id.exists' => 'Warehouse harus aktif dan berasal dari negara yang dipilih.',
+        ]);
+    }
+
+    private function generateUniqueNumber(string $prefix): string
+    {
+        do {
+            $number = $prefix . '-' . now()->format('ymd') . '-' . strtoupper(Str::random(7));
+        } while (
+            ($prefix === 'INV' && Invoice::where('invoice_number', $number)->exists())
+            || ($prefix !== 'INV' && Order::where('order_number', $number)->exists())
+        );
+
+        return $number;
+    }
+}

@@ -1,0 +1,1 @@
+<?php use Monolog\Handler\NullHandler; return ['default'=>'single','deprecations'=>['channel'=>'null','trace'=>false],'channels'=>['single'=>['driver'=>'single','path'=>storage_path('logs/laravel.log'),'level'=>'debug'],'null'=>['driver'=>'monolog','handler'=>NullHandler::class]]];

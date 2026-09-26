@@ -1,0 +1,1 @@
+<?php namespace App\Models; use Illuminate\Database\Eloquent\Model; class ShippingOption extends Model{protected $fillable=['country_id','label','amount_foreign','active'];protected function casts():array{return['amount_foreign'=>'decimal:4','active'=>'boolean'];}public function country(){return $this->belongsTo(Country::class);}}
