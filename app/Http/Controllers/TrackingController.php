@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Shipment;
+use App\Support\Search;
 use Illuminate\Http\Request;
 
 class TrackingController extends Controller
@@ -13,16 +14,20 @@ class TrackingController extends Controller
             'q' => ['nullable', 'string', 'max:180'],
         ]);
 
-        $query = trim((string) ($data['q'] ?? ''));
+        $query = Search::term($data['q'] ?? null);
 
         $shipments = Shipment::with('country')
             ->where('visible_publicly', true)
-            ->when($query !== '', fn ($q) => $q->where(function ($sub) use ($query) {
-                $sub->where('reference', 'like', '%' . $query . '%')
-                    ->orWhere('item_details', 'like', '%' . $query . '%')
-                    ->orWhere('description_type', 'like', '%' . $query . '%')
-                    ->orWhere('tracking_number', 'like', '%' . $query . '%');
-            }))
+            ->when($query !== '', function ($builder) use ($query) {
+                $builder->where(function ($sub) use ($query) {
+                    Search::code($sub, 'reference', $query)
+                        ->orWhere('item_details', 'like', '%' . $query . '%')
+                        ->orWhere('description_type', 'like', '%' . $query . '%')
+                        ->orWhere('info', 'like', '%' . $query . '%')
+                        ->orWhere('tracking_number', 'like', '%' . $query . '%')
+                        ->orWhereHas('country', fn ($country) => $country->where('name', 'like', '%' . $query . '%')->orWhere('code', 'like', '%' . $query . '%'));
+                });
+            })
             ->latest()
             ->paginate(25)
             ->withQueryString();

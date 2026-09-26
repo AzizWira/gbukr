@@ -1,7 +1,9 @@
 @extends('layouts.app')
 @section('hide_footer', '1')
 @section('content')
-@php($isStaff = auth()->user()->isStaff())
+@php
+    $isStaff = auth()->user()->isStaff();
+@endphp
 <div class="dash-shell">
     <aside class="sidebar">
         <div class="side-brand">

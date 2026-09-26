@@ -14,7 +14,7 @@
     <form class="card" method="post" action="{{ route('owner.import.preview') }}" enctype="multipart/form-data" data-loading-text="Membaca workbook…">
         @csrf
         <h3>1. Pilih workbook</h3>
-        <p class="small muted">Gunakan file XLSX/XLS asli. Maksimal 20 MB. Preview belum mengubah database.</p>
+        <p class="small muted">Gunakan file XLSX/XLS asli. Maksimal 5 MB. Preview belum mengubah database.</p>
 
         <div class="field" style="margin-top:14px">
             <label>File spreadsheet</label>
@@ -47,14 +47,14 @@
                 </div>
             @endforeach
 
-            <form method="post" action="{{ route('owner.import.run') }}" style="margin-top:18px" data-confirm="Jalankan migrasi workbook ini? Data akan dimasukkan ke GO yang dipilih dan diproses di background." data-loading-text="Menjadwalkan import…">
+            <form method="post" action="{{ route('owner.import.run') }}" style="margin-top:18px" data-go-choice-form data-confirm="Jalankan migrasi workbook ini? Data akan dimasukkan ke GO yang dipilih dan diproses di background." data-loading-text="Menjadwalkan import…">
                 @csrf
                 <div class="field">
                     <label>Masukkan data ke GO</label>
-                    <select class="select" name="go_group_id">
+                    <select class="select" name="go_group_id" data-go-existing>
                         <option value="">Pilih GO yang sudah ada</option>
                         @foreach($groups as $group)
-                            <option value="{{ $group->id }}">{{ $group->name }}</option>
+                            <option value="{{ $group->id }}" @selected(old('go_group_id') == $group->id)>{{ $group->name }}</option>
                         @endforeach
                     </select>
                 </div>
@@ -63,7 +63,7 @@
 
                 <div class="field">
                     <label>Buat nama GO baru dari workbook ini</label>
-                    <input class="input" name="new_go_name" maxlength="120" placeholder="Contoh: CORTIS / SEVENTEEN / GO September">
+                    <input class="input" name="new_go_name" value="{{ old('new_go_name') }}" maxlength="120" placeholder="Contoh: CORTIS / SEVENTEEN / GO September" data-go-new>
                     <div class="help">Isi salah satu saja: pilih GO lama atau buat nama GO baru.</div>
                 </div>
 

@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Customer;
 use App\Http\Controllers\Controller;
 use App\Models\{BankAccount, Invoice, Payment, PaymentProof, User};
 use App\Notifications\{PaymentSubmittedCustomerNotification, PaymentSubmittedNotification};
+use App\Services\ImageStorageService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -45,7 +46,7 @@ class PaymentController extends Controller
         return view('customer.payments.create', compact('invoices', 'total', 'banks'));
     }
 
-    public function store(Request $request)
+    public function store(Request $request, ImageStorageService $images)
     {
         $data = $request->validate([
             'invoice_ids' => ['required', 'array', 'min:1', 'max:50'],
@@ -59,7 +60,7 @@ class PaymentController extends Controller
         $storedPath = null;
 
         try {
-            $payment = DB::transaction(function () use ($request, $invoiceIds, $file, $data, &$storedPath) {
+            $payment = DB::transaction(function () use ($request, $invoiceIds, $file, $data, $images, &$storedPath) {
                 $invoices = $request->user()->invoices()
                     ->whereIn('id', $invoiceIds)
                     ->whereIn('status', ['unpaid', 'partial', 'overdue'])
@@ -96,13 +97,23 @@ class PaymentController extends Controller
                     $invoice->update(['status' => 'pending']);
                 }
 
-                $storedPath = $file->store('payment-proofs');
+                if (str_starts_with((string) $file->getMimeType(), 'image/')) {
+                    $stored = $images->storeOptimized($file, 'payment-proofs', 'local', 1800, 82);
+                    $storedPath = $stored['path'];
+                    $storedMime = $stored['mime_type'];
+                    $storedSize = $stored['size'];
+                } else {
+                    $storedPath = $file->store('payment-proofs');
+                    $storedMime = $file->getMimeType();
+                    $storedSize = \Illuminate\Support\Facades\Storage::size($storedPath);
+                }
+
                 PaymentProof::create([
                     'payment_id' => $payment->id,
                     'path' => $storedPath,
                     'original_name' => $file->getClientOriginalName(),
-                    'mime_type' => $file->getMimeType(),
-                    'size' => $file->getSize(),
+                    'mime_type' => $storedMime,
+                    'size' => $storedSize,
                 ]);
 
                 return $payment;

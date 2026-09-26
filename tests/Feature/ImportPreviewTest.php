@@ -43,10 +43,14 @@ class ImportPreviewTest extends TestCase
             'file' => $upload,
         ]);
 
-        $response->assertOk();
-        $response->assertSee('STATUS BARANG');
-        $response->assertSee('TAGIHAN KR');
+        $response->assertRedirect(route('owner.import.index'));
         $response->assertSessionHas('legacy_import_path');
+
+        $this->actingAs($owner)
+            ->get(route('owner.import.index'))
+            ->assertOk()
+            ->assertSee('STATUS BARANG')
+            ->assertSee('TAGIHAN KR');
     }
 
     public function test_invalid_workbook_returns_form_error_instead_of_500(): void

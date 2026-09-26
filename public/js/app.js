@@ -229,6 +229,41 @@
 
   qa('[data-dialog-close]').forEach(button=>button.addEventListener('click',()=>button.closest('dialog')?.close()));
 
+  // Import legacy wajib memilih tepat satu tujuan GO sebelum request dikirim.
+  qa('[data-go-choice-form]').forEach(form=>{
+    const existing=q('[data-go-existing]',form);
+    const fresh=q('[data-go-new]',form);
+    const clear=()=>{
+      [existing,fresh].forEach(control=>{
+        if(!control) return;
+        control.classList.remove('is-invalid');
+        control.removeAttribute('aria-invalid');
+      });
+    };
+    existing?.addEventListener('change',clear);
+    fresh?.addEventListener('input',clear);
+    form.addEventListener('submit',event=>{
+      const hasExisting=!!existing?.value;
+      const hasNew=!!fresh?.value.trim();
+      if(hasExisting !== hasNew) return;
+
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      [existing,fresh].forEach(control=>{
+        if(!control) return;
+        control.classList.add('is-invalid');
+        control.setAttribute('aria-invalid','true');
+      });
+
+      const message=hasExisting
+        ? 'Pilih salah satu saja: gunakan GO yang sudah ada atau buat GO baru. Hapus salah satu pilihan sebelum melanjutkan.'
+        : 'Import belum dijalankan karena GO belum ditentukan. Pilih GO yang sudah ada atau isi nama GO baru terlebih dahulu.';
+      openConfirm(message,()=>{
+        (hasExisting ? fresh : existing)?.focus();
+      },hasExisting ? 'Pilih satu GO' : 'GO wajib dipilih');
+    },true);
+  });
+
   // Jika sebuah view lupa memberi konfirmasi pada DELETE, tetap paksa konfirmasi global.
   qa('form').forEach(form=>{
     const methodOverride=q('input[name="_method"]',form)?.value?.toUpperCase();
@@ -268,7 +303,7 @@
     const otherDirty=otherDirtyForms(form);
     const explicitMessage=form.dataset.confirm||'';
     let message=explicitMessage;
-    let title='Konfirmasi';
+    let title=form.dataset.confirmTitle||'Konfirmasi';
 
     if(otherDirty.length>0){
       const dirtyWarning='Ada perubahan pada form lain yang belum disimpan. Jika dilanjutkan, perubahan tersebut akan hilang.';

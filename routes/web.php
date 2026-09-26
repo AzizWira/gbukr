@@ -57,6 +57,9 @@ Route::middleware(['auth','verified','role:customer'])->group(function(){
 Route::prefix('owner')->name('owner.')->middleware(['auth','verified','role:owner'])->group(function(){
     Route::get('/batches/create',[Owner\BatchController::class,'create'])->name('batches.create');
     Route::post('/batches',[Owner\BatchController::class,'store'])->name('batches.store');
+    Route::get('/batches/{batch}/edit',[Owner\BatchController::class,'edit'])->name('batches.edit');
+    Route::put('/batches/{batch}',[Owner\BatchController::class,'update'])->name('batches.update');
+    Route::delete('/batches/{batch}',[Owner\BatchController::class,'destroy'])->name('batches.destroy');
 
     Route::get('/products',[Owner\ProductController::class,'index'])->name('products.index');
     Route::get('/products/create',[Owner\ProductController::class,'create'])->name('products.create');
@@ -67,6 +70,8 @@ Route::prefix('owner')->name('owner.')->middleware(['auth','verified','role:owne
     Route::post('/products/{product}/variants',[Owner\ProductController::class,'variant'])->name('products.variant');
     Route::put('/products/{product}/variants/{variant}',[Owner\ProductController::class,'updateVariant'])->name('products.variant.update');
     Route::post('/products/{product}/variants/{variant}/toggle',[Owner\ProductController::class,'toggleVariant'])->name('products.variant.toggle');
+    Route::delete('/products/{product}/variants/{variant}',[Owner\ProductController::class,'destroyVariant'])->name('products.variant.destroy');
+    Route::post('/products/{product}/toggle',[Owner\ProductController::class,'toggle'])->name('products.toggle');
     Route::post('/products/{product}/close-po',[Owner\ProductController::class,'close'])->name('products.close');
 
     Route::post('/batches/{batch}/orders',[Owner\BatchController::class,'addOrder'])->name('batches.orders.store');
@@ -77,6 +82,9 @@ Route::prefix('owner')->name('owner.')->middleware(['auth','verified','role:owne
     Route::post('/orders/{order}/adjustments',[Owner\AdjustmentController::class,'store'])->name('orders.adjustments.store');
     Route::get('/customers',[Owner\CustomerController::class,'index'])->name('customers.index');
     Route::get('/customers/{customer}',[Owner\CustomerController::class,'show'])->name('customers.show');
+    Route::put('/customers/{customer}',[Owner\CustomerController::class,'update'])->name('customers.update');
+    Route::post('/customers/{customer}/toggle',[Owner\CustomerController::class,'toggle'])->name('customers.toggle');
+    Route::delete('/customers/{customer}',[Owner\CustomerController::class,'destroy'])->name('customers.destroy');
     Route::post('/customers/{customer}/merge',[Owner\CustomerController::class,'merge'])->name('customers.merge');
 
     Route::get('/payments',[Owner\PaymentController::class,'index'])->name('payments.index');
@@ -87,17 +95,28 @@ Route::prefix('owner')->name('owner.')->middleware(['auth','verified','role:owne
     Route::get('/payment-proofs/{proof}',[Owner\PaymentController::class,'proof'])->name('payments.proof');
     Route::get('/invoices',[Owner\InvoiceController::class,'index'])->name('invoices.index');
     Route::post('/invoices',[Owner\InvoiceController::class,'store'])->name('invoices.store');
+    Route::put('/invoices/{invoice}',[Owner\InvoiceController::class,'update'])->name('invoices.update');
+    Route::delete('/invoices/{invoice}',[Owner\InvoiceController::class,'destroy'])->name('invoices.destroy');
     Route::get('/master',[Owner\MasterDataController::class,'index'])->name('master.index');
     Route::get('/rate',[Owner\MasterDataController::class,'rateIndex'])->name('rate.index');
     Route::get('/data',[Owner\MasterDataController::class,'dataIndex'])->name('data.index');
     Route::post('/master/country/{country?}',[Owner\MasterDataController::class,'country'])->name('master.country');
-    Route::post('/master/shipping',[Owner\MasterDataController::class,'shipping'])->name('master.shipping');
+    Route::post('/master/country/{country}/toggle',[Owner\MasterDataController::class,'toggleCountry'])->name('master.country.toggle');
+    Route::delete('/master/country/{country}',[Owner\MasterDataController::class,'destroyCountry'])->name('master.country.destroy');
+    Route::post('/master/shipping/{shipping?}',[Owner\MasterDataController::class,'shipping'])->name('master.shipping');
     Route::post('/master/shipping/{shipping}/toggle',[Owner\MasterDataController::class,'toggleShipping'])->name('master.shipping.toggle');
-    Route::post('/master/warehouse',[Owner\MasterDataController::class,'warehouse'])->name('master.warehouse');
-    Route::post('/master/go',[Owner\MasterDataController::class,'group'])->name('master.go');
-    Route::post('/master/bank',[Owner\MasterDataController::class,'bank'])->name('master.bank');
+    Route::delete('/master/shipping/{shipping}',[Owner\MasterDataController::class,'destroyShipping'])->name('master.shipping.destroy');
+    Route::post('/master/warehouse/{warehouse?}',[Owner\MasterDataController::class,'warehouse'])->name('master.warehouse');
+    Route::post('/master/warehouse/{warehouse}/toggle',[Owner\MasterDataController::class,'toggleWarehouse'])->name('master.warehouse.toggle');
+    Route::delete('/master/warehouse/{warehouse}',[Owner\MasterDataController::class,'destroyWarehouse'])->name('master.warehouse.destroy');
+    Route::post('/master/go/{group?}',[Owner\MasterDataController::class,'group'])->name('master.go');
+    Route::post('/master/go/{group}/toggle',[Owner\MasterDataController::class,'toggleGroup'])->name('master.go.toggle');
+    Route::delete('/master/go/{group}',[Owner\MasterDataController::class,'destroyGroup'])->name('master.go.destroy');
+    Route::post('/master/bank/{bank?}',[Owner\MasterDataController::class,'bank'])->name('master.bank');
     Route::post('/master/bank/{bank}/toggle',[Owner\MasterDataController::class,'toggleBank'])->name('master.bank.toggle');
+    Route::delete('/master/bank/{bank}',[Owner\MasterDataController::class,'destroyBank'])->name('master.bank.destroy');
     Route::post('/master/status/{status?}',[Owner\MasterDataController::class,'status'])->name('master.status');
+    Route::delete('/master/status/{status}',[Owner\MasterDataController::class,'destroyStatus'])->name('master.status.destroy');
     Route::get('/admins',[Owner\AdminController::class,'index'])->name('admins.index');
     Route::post('/admins',[Owner\AdminController::class,'store'])->name('admins.store');
     Route::post('/admins/{admin}/toggle',[Owner\AdminController::class,'toggle'])->name('admins.toggle');
@@ -119,4 +138,5 @@ Route::prefix('owner')->name('owner.')->middleware(['auth','verified','role:owne
     Route::get('/tracking',[Owner\TrackingController::class,'index'])->name('tracking.index');
     Route::post('/tracking',[Owner\TrackingController::class,'store'])->name('tracking.store');
     Route::patch('/tracking/{shipment}',[Owner\TrackingController::class,'update'])->name('tracking.update');
+    Route::delete('/tracking/{shipment}',[Owner\TrackingController::class,'destroy'])->name('tracking.destroy');
 });

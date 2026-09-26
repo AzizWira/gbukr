@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Product;
+use App\Support\Search;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 
@@ -15,12 +16,20 @@ class CatalogController extends Controller
             'type' => ['nullable', Rule::in(['po', 'ready'])],
         ]);
 
-        $query = trim((string) ($data['q'] ?? ''));
+        $query = Search::term($data['q'] ?? null);
 
         $products = Product::with(['country', 'variants', 'preorder'])
             ->where('active', true)
             ->when(!empty($data['type']), fn ($q) => $q->where('type', $data['type']))
-            ->when($query !== '', fn ($q) => $q->where('name', 'like', '%' . $query . '%'))
+            ->when($query !== '', fn ($builder) => $builder->where(function ($sub) use ($query) {
+                $sub->where('name', 'like', '%' . $query . '%')
+                    ->orWhere('description', 'like', '%' . $query . '%')
+                    ->orWhereHas('country', fn ($country) => $country->where('name', 'like', '%' . $query . '%'))
+                    ->orWhereHas('variants', fn ($variant) => $variant
+                        ->where('name', 'like', '%' . $query . '%')
+                        ->orWhere('sku', 'like', '%' . $query . '%')
+                        ->orWhere('source_label', 'like', '%' . $query . '%'));
+            }))
             ->latest()
             ->paginate(12)
             ->withQueryString();

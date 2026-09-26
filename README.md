@@ -1,86 +1,121 @@
 # GBUKPOP x KRJASTIP — GBUKR
 
-GBUKR adalah aplikasi web untuk mengelola PO, Ready Stock, Batch/GO, tagihan, pembayaran transfer manual, kalkulator harga, tracking barang, migrasi spreadsheet lama, dan backup data GBUKPOP x KRJASTIP.
+GBUKR adalah aplikasi web operasional untuk mengelola PO, Ready Stock, Batch/GO, tagihan, pembayaran transfer manual, kalkulator harga, tracking barang, migrasi spreadsheet lama, dan backup data GBUKPOP x KRJASTIP.
 
 ## Role
 
 ### Customer
-- registrasi/login email atau Google;
-- verifikasi email dan reset password;
-- melihat produk PO dan Ready Stock;
-- keranjang dan checkout;
-- melihat order, tagihan, denda, dan Tagihan Tambahan;
-- memilih rekening tujuan sebelum mengirim bukti pembayaran;
-- upload bukti transfer;
-- melihat tracking dan status barang.
+Customer dapat registrasi/login melalui email atau Google, memverifikasi email, menggunakan kalkulator, melihat katalog, memasukkan beberapa barang ke Keranjang, checkout, melihat order/tagihan, memilih rekening transfer, mengunggah bukti pembayaran, dan memantau tracking barang.
 
 ### Admin
-Admin berasal dari akun customer yang diberi akses Admin oleh Owner. Saat login, user dapat memilih mode Customer atau Admin.
-
-Mode Admin difokuskan pada:
-- Batch;
-- Tracking;
-- pembaruan status operasional.
-
-Admin tidak memiliki akses ke konfigurasi finansial, customer global, produk, migrasi, backup, atau pengaturan Owner.
+Admin berasal dari akun Customer yang diberi akses Admin oleh Owner. Saat login user yang memiliki akses Admin dapat memilih masuk sebagai Customer atau Admin. Mode Admin hanya berfokus pada operasional Batch dan Tracking; akses finansial dan konfigurasi Owner tidak diberikan.
 
 ### Owner
-Owner memiliki kontrol penuh terhadap:
-- produk, PO, Ready Stock dan variasi;
-- Batch dan customer di dalam Batch;
-- GO dan warehouse;
-- tagihan, pembayaran dan bukti transfer;
-- Tagihan Tambahan (Tax, Shipping Aktual, Berat, Rate, Berat + Rate, Lainnya);
-- Rate dan mata uang;
-- Data Master: shipping, rekening, GO, warehouse dan status;
-- status custom beserta warna;
-- Admin;
-- migrasi spreadsheet;
-- export dan backup XLSX.
+Owner mengelola seluruh sistem: produk dan variasi, PO/Ready Stock, Batch, GO, warehouse, customer, tagihan, pembayaran, rekening, rate, shipping, status, akses Admin, migrasi spreadsheet, dan export/backup.
 
-## Alur utama
+## PO, Ready Stock, dan Keranjang
+- Produk dapat mempunyai beberapa variasi, website sumber, estimasi berat, harga foreign/IDR dan DP per variasi.
+- Status tax produk dapat ditandai sudah termasuk estimasi tax atau belum termasuk tax.
+- Gambar produk disimpan dalam format yang dioptimalkan jika server mendukung GD/WebP.
+- Setelah Tambah ke Keranjang customer tetap berada di detail produk; Keranjang dapat dibuka dari navbar/sidebar.
+- Ready Stock selalu mengecek stok kembali saat checkout.
 
-### PO / Ready Stock
-Customer memilih variasi → tambah ke Keranjang → checkout → invoice dibuat → customer transfer ke rekening yang dipilih → upload bukti → Owner verifikasi → order berjalan sampai selesai.
+## Batch dan kode otomatis
+Batch manual yang dibuat Owner tidak membutuhkan input kode. Sistem membuat kode yang lebih mudah dibaca dengan pola:
 
-### Batch
-Order diambil dari GO luar website → Owner membuat Batch → memasukkan customer/order → status Batch berlaku ke seluruh order terkait → bila ada Tax/Rate/Berat/Shipping tambahan, Owner membuat Tagihan Tambahan tanpa mengubah tagihan awal.
+```text
+{NEGARA}-{GO/CONTEXT}-{URUTAN}
+```
 
-### Tagihan Tambahan
-Satu order atau satu Batch dapat memiliki lebih dari satu tambahan sekaligus. Setiap tambahan disimpan terpisah agar histori tetap jelas.
+Contoh:
 
-Jenis:
-- Tax / Pajak;
-- Shipping Aktual;
-- Penyesuaian Berat;
-- Penyesuaian Rate;
-- Berat + Rate;
-- Lainnya.
+```text
+KR-ENHYPEN-001
+US-KRJASTIP-002
+```
 
-Field form berubah mengikuti jenis yang dipilih.
+Bagian tengah memakai nama GO bila Batch terhubung ke GO. Jika GO kosong, sistem memakai nama Batch sebagai context dan menormalisasinya menjadi token singkat. Nomor urut dihitung per prefix sehingga kode tetap unik. Kode tidak berubah ketika metadata Batch diedit.
+
+Batch hasil migrasi spreadsheet memakai pola berbeda agar referensi lama tetap dapat dilacak:
+
+```text
+{NEGARA}-LEG-G{ID_GO}-{REFERENSI_LAMA}
+```
+
+Contoh:
+
+```text
+CH-LEG-G3-311
+```
+
+Artinya:
+- `CH` = negara China;
+- `LEG` = data berasal dari migrasi legacy;
+- `G3` = data terikat ke record GO dengan ID database 3;
+- `311` = nilai Batch/referensi asli dari spreadsheet setelah dinormalisasi.
+
+Jika sebuah baris workbook sama sekali tidak mempunyai Batch/referensi, importer membuat referensi fallback deterministik seperti `UNASSIGNED-ABC123`. Fallback dibedakan berdasarkan workbook dan negara. STATUS BARANG dan TAGIHAN dari workbook/negara yang sama dapat mengarah ke fallback Batch yang sama, sementara file atau GO berbeda tidak tercampur.
 
 ## Kalkulator Batch
-Rumus:
 
 ```text
 Fee per barang = ((Fee Shipping × Rate) + Fee Admin) ÷ Jumlah Barengan
 Estimasi Total = (Harga Barang × Rate) + Fee per barang
 ```
 
-Harga kalkulator merupakan estimasi shipping dan harga bersih negara asal; tax/pajak belum termasuk kecuali dinyatakan lain.
+Kalkulator menggunakan rate aktif dan simbol mata uang yang diatur Owner. Shipping dapat bernilai 0 untuk Free Shipping. Nilai kalkulator adalah estimasi; shipping aktual dapat berubah dan harga barang merupakan harga bersih negara asal yang belum termasuk tax kecuali dinyatakan lain.
+
+## Tagihan Tambahan
+Satu order atau Batch dapat memiliki beberapa Tagihan Tambahan sekaligus tanpa mengubah tagihan awal. Jenisnya meliputi Tax/Pajak, Shipping Aktual, Penyesuaian Berat, Penyesuaian Rate, Berat + Rate, dan Lainnya. Field form menyesuaikan jenis yang dipilih.
 
 ## Pembayaran
-- transfer langsung ke rekening Owner;
-- customer wajib memilih rekening yang digunakan;
-- bukti pembayaran dapat berupa gambar atau PDF;
-- preview tersedia sebelum upload dan pada dashboard Owner;
-- Owner menerima/menolak setelah mencocokkan mutasi.
+Customer wajib memilih rekening tujuan yang benar sebelum mengirim bukti transfer. Bukti dapat berupa JPG, PNG, WEBP, atau PDF. Gambar bukti dioptimalkan saat disimpan jika server mendukung GD/WebP; PDF dipertahankan apa adanya. Owner dapat preview bukti lalu menerima atau menolak pembayaran setelah mencocokkan mutasi.
 
-## Tracking & Status
-Owner dapat mengubah nama, urutan, aktif/nonaktif, dan warna status dari Data Master. Core status tetap mempunyai kode internal agar otomatisasi seperti Arrived GBU/KRJASTIP dan Unclaimed tidak rusak.
+## Search, filter, dan pagination
+Daftar utama seperti Batch, Tracking, Order, Tagihan, Pembayaran, Customer, Produk, serta daftar milik Customer mendukung pencarian. Untuk identifier seperti kode Batch/Order/Invoice/Payment, pencarian toleran terhadap perbedaan huruf besar-kecil dan tanda pemisah. Filter memiliki tombol Clear.
 
-## Migrasi & Backup
-Importer mendukung workbook legacy GBUKPOP/KRJASTIP dan memproses file besar melalui queue. Backup dapat diekspor ke XLSX per GO atau backup lengkap dengan beberapa sheet.
+Jika hasil mempunyai lebih dari satu halaman, pagination menyediakan Previous/Next dan input nomor halaman sehingga user dapat langsung menuju halaman tertentu tanpa maju satu per satu.
+
+## Siklus hidup data
+Sistem memakai **conditional delete** untuk mencegah histori rusak. Data yang belum pernah dipakai dapat dihapus permanen dengan dialog konfirmasi yang menjelaskan dampaknya. Jika record sudah dipakai, hard delete diblokir dan Owner diarahkan memakai Nonaktifkan/Arsip/Batal sesuai jenis datanya.
+
+- Negara/rate: dapat dihapus hanya jika belum terhubung ke produk, Batch, tracking, shipping, atau warehouse.
+- Shipping: dapat dihapus permanen karena kalkulator tidak menyimpan foreign key shipping pada transaksi lama; nominal transaksi sudah menjadi snapshot.
+- Warehouse: dapat dihapus jika belum dipakai Batch; jika sudah dipakai gunakan Nonaktifkan.
+- GO: dapat dihapus jika belum memiliki Batch, order, atau riwayat import; jika sudah dipakai gunakan Nonaktifkan.
+- Rekening: dapat dihapus jika belum pernah dipakai pembayaran; jika sudah dipakai gunakan Nonaktifkan agar rekening tujuan lama tetap terbaca.
+- Status custom: dapat dihapus jika belum digunakan; status inti tidak dapat dihapus.
+- Produk/variasi: dapat dihapus jika belum pernah dipakai item order; jika sudah dipakai gunakan Nonaktifkan.
+- Customer: dapat dihapus jika belum mempunyai order, tagihan, pembayaran, dan tidak memiliki akses Admin; customer berhistori hanya dapat dinonaktifkan.
+- Batch: dapat diedit dan Batch kosong dapat dihapus; Batch yang sudah mempunyai order dipertahankan.
+- Tracking manual: dapat diedit/dihapus; Tracking yang berasal dari Batch dikelola melalui Batch agar sinkron.
+- Tagihan: dapat diedit atau dibatalkan sebelum mempunyai proses pembayaran. Pembatalan menyimpan histori.
+- Order, Payment, dan Import Run yang sudah menjadi histori tidak dihapus sembarangan.
+- Customer legacy dapat digabungkan ke akun Customer yang benar melalui fitur merge.
+
+## Tracking dan status
+Tracking publik tidak menampilkan identitas pribadi customer. Owner dapat mengatur label, urutan, aktif/nonaktif, dan warna status. Core status dijaga agar otomatisasi status Batch/Order dan Unclaimed tetap bekerja.
+
+## Migrasi spreadsheet lama
+- Upload workbook XLSX/XLS maksimal 5 MB.
+- Satu workbook wajib dipetakan ke tepat satu GO: pilih GO yang sudah ada atau buat GO baru. Import tidak dapat dijalankan sebelum pilihan tersebut valid.
+- Import berjalan melalui queue agar workbook besar tidak timeout di request browser.
+- Baris tanpa Batch tetap dapat diimport menggunakan fallback Batch otomatis.
+- File workbook asli dipertahankan sebagai arsip karena XLSX sendiri sudah terkompresi dan perlu dapat diunduh kembali.
+- Sheet yang belum mempunyai aturan bisnis jelas tidak dipaksakan masuk database.
+
+## Kebijakan file
+- Gambar produk: upload maksimal 5 MB, resize maksimal sekitar 1800 px dan disimpan sebagai WebP jika GD/WebP tersedia.
+- Bukti pembayaran gambar: upload maksimal 5 MB dan dioptimalkan dengan kebijakan yang sama.
+- Bukti pembayaran PDF: maksimal 5 MB dan disimpan apa adanya.
+- Workbook migrasi: maksimal 5 MB dan dipertahankan asli.
+- Semua input file gambar mempunyai preview di browser sebelum form dikirim.
+
+## Email
+Email verifikasi dan reset password dikirim langsung agar tidak bergantung pada worker queue. Notifikasi operasional/transaksi dapat menggunakan queue. Template email menggunakan branding GBUKR.
+
+## Export dan backup
+Owner dapat export data per GO atau backup lengkap ke XLSX dengan beberapa sheet agar struktur rekap tetap mudah dibaca. Backup mempertahankan informasi transaksi, rekening, status, dan metadata penting lain yang digunakan sistem.
 
 ## Setup lokal
 
@@ -104,7 +139,7 @@ Scheduler:
 php artisan schedule:work
 ```
 
-Jika `QUEUE_CONNECTION=database`:
+Jika menggunakan database queue:
 
 ```powershell
 php artisan queue:work --timeout=900 --tries=3
@@ -125,12 +160,12 @@ SEED_DEMO_DATA=true
 DEMO_PASSWORD=DemoGBUKR2026!
 ```
 
-SMTP dan Google OAuth diisi sesuai provider yang digunakan.
+SMTP dan Google OAuth diisi sesuai provider. Untuk server yang akan mengoptimalkan gambar, aktifkan extension PHP GD dengan dukungan WebP.
 
 ## Demo data
-Seeder demo bersifat scenario-driven. Data demo mencakup beberapa negara, PO, Ready Stock, Batch di beberapa tahap status, invoice unpaid/partial/pending/paid/overdue, payment pending/approved/rejected, Unclaimed, rekening aktif/nonaktif, status custom, serta seluruh jenis Tagihan Tambahan termasuk satu order dengan Tax + Rate sekaligus.
+Seeder demo dibuat berdasarkan skenario sistem, bukan sekadar menambah banyak baris. Data demo mencakup beberapa negara, PO tax-included/tax-excluded, PO DP/Full Payment, Ready Stock, Free Shipping, Batch pada beberapa status, invoice unpaid/partial/pending/paid/overdue, denda, payment pending/approved/rejected, Unclaimed, rekening aktif/nonaktif, status custom, serta seluruh jenis Tagihan Tambahan termasuk satu order dengan Tax + Rate sekaligus.
 
-Untuk production, gunakan:
+Untuk production:
 
 ```env
 SEED_DEMO_DATA=false

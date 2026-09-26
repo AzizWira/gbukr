@@ -17,7 +17,7 @@
         <option value="po" @selected(request('type') === 'po')>PO</option>
         <option value="ready" @selected(request('type') === 'ready')>Ready Stock</option>
     </select>
-    <button class="btn btn-primary">Filter</button>
+    @include('partials.filter-actions',['submitLabel'=>'Filter'])
 </form>
 
 <div class="table-wrap">

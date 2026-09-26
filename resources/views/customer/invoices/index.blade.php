@@ -16,6 +16,11 @@
     </div>
 </div>
 
+<form class="filters" method="get">
+    <input class="input" name="q" value="{{ request('q') }}" placeholder="Invoice / order / barang / batch">
+    @include('partials.filter-actions')
+</form>
+
 <form method="get" action="{{ route('customer.payments.create') }}" data-no-dirty-guard>
     <div class="grid grid-2">
         <div class="card">

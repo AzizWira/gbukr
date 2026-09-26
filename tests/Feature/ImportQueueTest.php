@@ -81,4 +81,59 @@ class ImportQueueTest extends TestCase
         $response->assertSessionHasErrors('file');
         $this->assertDatabaseCount('import_runs', 1);
     }
+
+    public function test_import_run_requires_exactly_one_go_destination(): void
+    {
+        Storage::fake('local');
+        Queue::fake();
+
+        $owner = User::factory()->create([
+            'role' => 'owner',
+            'active' => true,
+            'email_verified_at' => now(),
+        ]);
+        Storage::disk('local')->put('imports/no-go.xlsx', 'placeholder');
+
+        $response = $this->actingAs($owner)
+            ->withSession([
+                'legacy_import_path' => 'imports/no-go.xlsx',
+                'legacy_import_name' => 'no-go.xlsx',
+                'legacy_import_preview' => ['estimated_rows' => 10],
+            ])
+            ->post(route('owner.import.run'), []);
+
+        $response->assertRedirect(route('owner.import.index'));
+        $response->assertSessionHasErrors('go_group_id');
+        $this->assertDatabaseCount('import_runs', 0);
+        Queue::assertNothingPushed();
+    }
+
+    public function test_import_run_rejects_existing_and_new_go_at_the_same_time(): void
+    {
+        Storage::fake('local');
+        Queue::fake();
+
+        $owner = User::factory()->create([
+            'role' => 'owner',
+            'active' => true,
+            'email_verified_at' => now(),
+        ]);
+        $go = GoGroup::create(['name' => 'Existing GO', 'status' => 'active']);
+        Storage::disk('local')->put('imports/double-go.xlsx', 'placeholder');
+
+        $response = $this->actingAs($owner)
+            ->withSession([
+                'legacy_import_path' => 'imports/double-go.xlsx',
+                'legacy_import_name' => 'double-go.xlsx',
+                'legacy_import_preview' => ['estimated_rows' => 10],
+            ])
+            ->post(route('owner.import.run'), [
+                'go_group_id' => $go->id,
+                'new_go_name' => 'New GO',
+            ]);
+
+        $response->assertRedirect(route('owner.import.index'));
+        $response->assertSessionHasErrors('go_group_id');
+        $this->assertDatabaseCount('import_runs', 0);
+    }
 }

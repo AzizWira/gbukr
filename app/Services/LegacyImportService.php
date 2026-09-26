@@ -128,7 +128,7 @@ class LegacyImportService
             );
         }
 
-        $this->importStatusSheet($book, $group, $summary, $tick);
+        $this->importStatusSheet($book, $group, $sourceName, $summary, $tick);
 
         if ($progress) {
             $progress($totalRows, $totalRows);
@@ -205,8 +205,9 @@ class LegacyImportService
                 $user = $this->legacyCustomer($name, $group, $summary);
                 $forcedPo = $definition['source'] === 'po';
                 $isPo = $forcedPo || $this->isPoReference((string) $lastBatch);
+                $reference = (string) ($lastBatch ?: $this->unassignedReference($sourceName, $sheetName, $country?->code));
                 $batch = (!$isPo && $country)
-                    ? $this->legacyBatch($country, (string) ($lastBatch ?: 'Tanpa Batch'), $group)
+                    ? $this->legacyBatch($country, $reference, $group)
                     : null;
 
                 $countryCode = $country?->code ?: 'PO';
@@ -433,7 +434,7 @@ class LegacyImportService
         return [$invoice, $created];
     }
 
-    private function importStatusSheet(Spreadsheet $book, GoGroup $group, array &$summary, callable $tick): void
+    private function importStatusSheet(Spreadsheet $book, GoGroup $group, string $sourceName, array &$summary, callable $tick): void
     {
         $sheet = null;
         foreach ($book->getWorksheetIterator() as $candidate) {
@@ -499,7 +500,8 @@ class LegacyImportService
             }
 
             $isPo = $this->isPoReference((string) $lastRef);
-            $batch = $isPo ? null : $this->legacyBatch($country, (string) ($lastRef ?: 'Tanpa Batch'), $group);
+            $batchReference = (string) ($lastRef ?: $this->unassignedReference($sourceName, 'STATUS BARANG', $country->code));
+            $batch = $isPo ? null : $this->legacyBatch($country, $batchReference, $group);
             $reference = $batch?->code ?: 'PO-G' . $group->id . '-' . $country->code;
             $key = ($isPo ? 'po' : 'batch') . '|' . ($batch?->id ?: 0) . '|' . $country->id . '|' . $reference;
 
@@ -652,6 +654,15 @@ class LegacyImportService
         return $this->customerCache[$cacheKey] = $user;
     }
 
+    private function unassignedReference(string $sourceName, string $sheetName, ?string $countryCode = null): string
+    {
+        // Jika workbook lama tidak memiliki kode Batch, satukan fallback per workbook + negara.
+        // Dengan begitu STATUS BARANG dan TAGIHAN negara yang sama tetap mengarah ke Batch fallback
+        // yang sama, tetapi workbook/GO berbeda tidak akan tercampur.
+        $fingerprint = strtoupper(substr(sha1(mb_strtolower($sourceName . '|' . (string) $countryCode)), 0, 6));
+        return 'UNASSIGNED-' . $fingerprint;
+    }
+
     private function legacyBatch(Country $country, string $reference, GoGroup $group): Batch
     {
         $reference = trim($reference) ?: 'Tanpa Batch';
@@ -680,7 +691,7 @@ class LegacyImportService
                 'go_group_id' => $group->id,
                 'country_id' => $country->id,
                 'code' => $code,
-                'name' => 'Legacy Batch ' . $reference,
+                'name' => str_starts_with($reference, 'UNASSIGNED-') ? 'Legacy Tanpa Batch ' . $reference : 'Legacy Batch ' . $reference,
                 'description' => 'Dibuat otomatis dari migrasi spreadsheet GO ' . $group->name . '.',
                 'status' => 'ordered',
             ]);

@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Owner;
 use App\Http\Controllers\Controller;
 use App\Models\Order;
 use App\Services\OrderStatusService;
+use App\Support\Search;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 
@@ -17,14 +18,25 @@ class OrderController extends Controller
             'status' => ['nullable', Rule::in(OrderStatusService::statuses())],
         ]);
 
-        $query = trim((string) ($data['q'] ?? ''));
+        $query = Search::term($data['q'] ?? null);
 
         $orders = Order::with(['customer', 'items', 'batch', 'preorder.product', 'goGroup'])
-            ->when($query !== '', fn ($q) => $q->where(function ($sub) use ($query) {
-                $sub->where('order_number', 'like', '%' . $query . '%')
-                    ->orWhereHas('customer', fn ($user) => $user->where('name', 'like', '%' . $query . '%'))
-                    ->orWhereHas('items', fn ($item) => $item->where('item_name', 'like', '%' . $query . '%'));
-            }))
+            ->when($query !== '', function ($builder) use ($query) {
+                $builder->where(function ($sub) use ($query) {
+                    Search::code($sub, 'order_number', $query)
+                        ->orWhereHas('customer', fn ($user) => $user
+                            ->where('name', 'like', '%' . $query . '%')
+                            ->orWhere('email', 'like', '%' . $query . '%'))
+                        ->orWhereHas('items', fn ($item) => $item
+                            ->where('item_name', 'like', '%' . $query . '%')
+                            ->orWhere('details', 'like', '%' . $query . '%'))
+                        ->orWhereHas('batch', fn ($batch) => Search::code($batch, 'code', $query)
+                            ->orWhere('name', 'like', '%' . $query . '%')
+                            ->orWhere('tracking_number', 'like', '%' . $query . '%'))
+                        ->orWhereHas('goGroup', fn ($go) => $go->where('name', 'like', '%' . $query . '%'))
+                        ->orWhereHas('preorder.product', fn ($product) => $product->where('name', 'like', '%' . $query . '%'));
+                });
+            })
             ->when(!empty($data['status']), fn ($q) => $q->where('status', $data['status']))
             ->latest()
             ->paginate(25)

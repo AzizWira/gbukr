@@ -3,7 +3,9 @@
 namespace App\Http\Controllers\Owner;
 
 use App\Http\Controllers\Controller;
-use App\Models\{Country, Product, ProductVariant};
+use App\Models\{Country, OrderItem, Product, ProductVariant};
+use App\Services\ImageStorageService;
+use App\Support\Search;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -19,10 +21,18 @@ class ProductController extends Controller
             abort(422, 'Filter jenis produk tidak valid.');
         }
 
-        $query = trim((string) $request->query('q', ''));
+        $query = Search::term($request->query('q'));
 
         $products = Product::with(['country', 'variants', 'preorder'])
-            ->when($query !== '', fn ($q) => $q->where('name', 'like', '%' . $query . '%'))
+            ->when($query !== '', fn ($builder) => $builder->where(function ($sub) use ($query) {
+                $sub->where('name', 'like', '%' . $query . '%')
+                    ->orWhere('description', 'like', '%' . $query . '%')
+                    ->orWhereHas('country', fn ($country) => $country->where('name', 'like', '%' . $query . '%')->orWhere('code', 'like', '%' . $query . '%'))
+                    ->orWhereHas('variants', fn ($variant) => $variant
+                        ->where('name', 'like', '%' . $query . '%')
+                        ->orWhere('sku', 'like', '%' . $query . '%')
+                        ->orWhere('source_label', 'like', '%' . $query . '%'));
+            }))
             ->when($type, fn ($q) => $q->where('type', $type))
             ->latest()
             ->paginate(20)
@@ -39,13 +49,13 @@ class ProductController extends Controller
         ]);
     }
 
-    public function store(Request $request)
+    public function store(Request $request, ImageStorageService $images)
     {
         $data = $this->validated($request);
         $storedImage = null;
 
         if ($request->hasFile('image')) {
-            $storedImage = $request->file('image')->store('products', 'public');
+            $storedImage = $images->storeOptimized($request->file('image'), 'products', 'public')['path'];
         }
 
         try {
@@ -87,21 +97,29 @@ class ProductController extends Controller
     public function edit(Product $product)
     {
         $product->load(['variants', 'preorder']);
+        $productUsageCount = OrderItem::where('product_id', $product->id)
+            ->orWhereIn('product_variant_id', $product->variants->pluck('id'))
+            ->count();
+        $variantUsage = $product->variants->mapWithKeys(fn (ProductVariant $variant) => [
+            $variant->id => OrderItem::where('product_variant_id', $variant->id)->count(),
+        ]);
 
         return view('owner.products.form', [
             'product' => $product,
             'countries' => Country::where('active', true)->orderBy('name')->get(),
+            'productUsageCount' => $productUsageCount,
+            'variantUsage' => $variantUsage,
         ]);
     }
 
-    public function update(Request $request, Product $product)
+    public function update(Request $request, Product $product, ImageStorageService $images)
     {
         $data = $this->validated($request, $product);
         $oldImage = $product->image_path;
         $newImage = null;
 
         if ($request->hasFile('image')) {
-            $newImage = $request->file('image')->store('products', 'public');
+            $newImage = $images->storeOptimized($request->file('image'), 'products', 'public')['path'];
         }
 
         try {
@@ -139,10 +157,30 @@ class ProductController extends Controller
         return back()->with('success', 'Produk berhasil diperbarui.');
     }
 
+    public function toggle(Product $product)
+    {
+        $product->update(['active' => !$product->active]);
+        return back()->with('success', $product->active ? 'Produk diaktifkan.' : 'Produk dinonaktifkan.');
+    }
+
     public function destroy(Product $product)
     {
-        $product->update(['active' => false]);
-        return back()->with('success', 'Produk dinonaktifkan.');
+        $variantIds = $product->variants()->pluck('id');
+        $usage = OrderItem::where('product_id', $product->id)
+            ->orWhereIn('product_variant_id', $variantIds)
+            ->count();
+
+        if ($usage > 0) {
+            throw ValidationException::withMessages([
+                'delete' => 'Produk tidak dapat dihapus permanen karena sudah dipakai oleh ' . $usage . ' item order. Nonaktifkan produk agar tidak dapat dipesan lagi tanpa merusak histori.',
+            ]);
+        }
+
+        $image = $product->image_path;
+        DB::transaction(fn () => $product->delete());
+        if ($image) Storage::disk('public')->delete($image);
+
+        return redirect()->route('owner.products.index')->with('success', 'Produk yang belum pernah dipakai berhasil dihapus permanen.');
     }
 
     public function variant(Request $request, Product $product)
@@ -194,6 +232,19 @@ class ProductController extends Controller
         $variant->update(['active' => !$variant->active]);
 
         return back()->with('success', $variant->active ? 'Variasi diaktifkan.' : 'Variasi dinonaktifkan.');
+    }
+
+    public function destroyVariant(Product $product, ProductVariant $variant)
+    {
+        abort_unless($variant->product_id === $product->id, 404);
+        $usage = OrderItem::where('product_variant_id', $variant->id)->count();
+        if ($usage > 0) {
+            throw ValidationException::withMessages([
+                'delete' => 'Variasi tidak dapat dihapus permanen karena sudah dipakai oleh ' . $usage . ' item order. Nonaktifkan variasi agar histori tetap aman.',
+            ]);
+        }
+        $variant->delete();
+        return back()->with('success', 'Variasi yang belum pernah dipakai berhasil dihapus permanen.');
     }
 
     public function updateVariant(Request $request, Product $product, ProductVariant $variant)
@@ -270,7 +321,7 @@ class ProductController extends Controller
             'apply_fansign' => ['nullable', 'boolean'],
             'location_note' => ['nullable', 'string', 'max:160'],
             'event_date' => ['nullable', 'date'],
-            'image' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:4096'],
+            'image' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
             'active' => ['nullable', 'boolean'],
             'payment_type' => ['required', 'in:full,dp,cicilan,pelunasan'],
             'payment_amount' => ['nullable', 'integer', 'min:1'],

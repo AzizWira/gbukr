@@ -49,7 +49,7 @@ class BatchFlowTest extends TestCase
 
         $batch = Batch::firstOrFail();
         $response->assertRedirect(route('owner.batches.show', $batch));
-        $this->assertMatchesRegularExpression('/^KR-\d{6}-001$/', $batch->code);
+        $this->assertSame('KR-GBUKPOP-001', $batch->code);
 
         $shipment = Shipment::where('source_type', 'batch')->where('source_id', $batch->id)->firstOrFail();
         $this->assertSame($batch->code, $shipment->reference);

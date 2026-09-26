@@ -17,10 +17,14 @@ class ImportController extends Controller
     private const IMPORT_DISK = 'local';
     private const IMPORT_DIR = 'imports';
 
-    public function index()
+    public function index(Request $request)
     {
+        $preview = (array) $request->session()->get('legacy_import_preview', []);
+
         return view('owner.import.index', [
-            'groups' => GoGroup::orderBy('name')->get(),
+            'preview' => $preview ?: null,
+            'importName' => $request->session()->get('legacy_import_name'),
+            'groups' => GoGroup::where('status', 'active')->orderBy('name')->get(),
             'runs' => ImportRun::with('goGroup')->latest()->limit(12)->get(),
         ]);
     }
@@ -28,11 +32,11 @@ class ImportController extends Controller
     public function preview(Request $request, LegacyImportService $service)
     {
         $request->validate([
-            'file' => ['required', 'file', 'max:20480'],
+            'file' => ['required', 'file', 'max:5120'],
         ], [
             'file.required' => 'Pilih file spreadsheet yang akan dipreview.',
             'file.file' => 'File upload tidak valid.',
-            'file.max' => 'Ukuran workbook maksimal 20 MB.',
+            'file.max' => 'Ukuran workbook maksimal 5 MB.',
         ]);
 
         $upload = $request->file('file');
@@ -83,12 +87,7 @@ class ImportController extends Controller
             $request->session()->put('legacy_import_name', $upload->getClientOriginalName());
             $request->session()->put('legacy_import_preview', $preview);
 
-            return view('owner.import.index', [
-                'preview' => $preview,
-                'groups' => GoGroup::orderBy('name')->get(),
-                'runs' => ImportRun::with('goGroup')->latest()->limit(12)->get(),
-                'importName' => $upload->getClientOriginalName(),
-            ]);
+            return redirect()->route('owner.import.index');
         } catch (ValidationException $e) {
             if ($path) {
                 $disk->delete($path);
@@ -140,16 +139,26 @@ class ImportController extends Controller
         }
 
         $data = $request->validate([
-            'go_group_id' => ['nullable', 'integer', 'exists:go_groups,id', 'required_without:new_go_name', 'prohibits:new_go_name'],
-            'new_go_name' => ['nullable', 'string', 'max:120', 'required_without:go_group_id', 'prohibits:go_group_id'],
-        ], [
-            'go_group_id.required_without' => 'Pilih GO tujuan atau isi nama GO baru.',
-            'new_go_name.required_without' => 'Pilih GO tujuan atau isi nama GO baru.',
-            'go_group_id.prohibits' => 'Pilih GO lama atau buat GO baru, jangan keduanya sekaligus.',
-            'new_go_name.prohibits' => 'Pilih GO lama atau buat GO baru, jangan keduanya sekaligus.',
+            'go_group_id' => ['nullable', 'integer', \Illuminate\Validation\Rule::exists('go_groups', 'id')->where(fn ($q) => $q->where('status', 'active'))],
+            'new_go_name' => ['nullable', 'string', 'max:120'],
         ]);
 
-        if (filled($data['new_go_name'] ?? null)) {
+        $selectedGo = filled($data['go_group_id'] ?? null);
+        $newGo = filled($data['new_go_name'] ?? null);
+
+        if (!$selectedGo && !$newGo) {
+            return redirect()->route('owner.import.index')
+                ->withInput()
+                ->withErrors(['go_group_id' => 'Pilih GO yang sudah ada atau buat GO baru sebelum menjalankan import.']);
+        }
+
+        if ($selectedGo && $newGo) {
+            return redirect()->route('owner.import.index')
+                ->withInput()
+                ->withErrors(['go_group_id' => 'Pilih salah satu saja: gunakan GO yang sudah ada atau buat GO baru.']);
+        }
+
+        if ($newGo) {
             $name = trim($data['new_go_name']);
             $group = GoGroup::whereRaw('LOWER(name) = ?', [mb_strtolower($name)])->first();
             if (!$group) {

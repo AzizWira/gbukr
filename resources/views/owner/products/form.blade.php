@@ -9,17 +9,41 @@
         <h1>{{ $product->exists ? $product->name : 'Tambah produk' }}</h1>
         <p class="muted">Atur informasi PO/Ready Stock, fee per barang, dan detail variasi yang ditampilkan ke customer.</p>
     </div>
-    @if($product->exists && $product->preorder?->isOpen())
+    @if($product->exists)
+        <div class="actions">
+            <form method="post" action="{{ route('owner.products.toggle',$product) }}" data-confirm="{{ $product->active ? 'Nonaktifkan produk ini? Produk tidak dapat dipesan lagi, tetapi order lama tetap aman.' : 'Aktifkan kembali produk ini?' }}">
+                @csrf
+                <button class="btn {{ $product->active ? 'btn-danger' : 'btn-soft' }}">{{ $product->active ? 'Nonaktifkan' : 'Aktifkan' }}</button>
+            </form>
+            @if(($productUsageCount ?? 0) === 0)
+                <form method="post" action="{{ route('owner.products.destroy',$product) }}" data-confirm-title="Hapus permanen" data-confirm="Hapus produk '{{ $product->name }}' secara permanen? Produk dan seluruh variasinya belum pernah dipakai dalam order. Foto produk juga akan dihapus. Tindakan tidak dapat dibatalkan.">
+                    @csrf
+                    @method('delete')
+                    <button class="btn btn-danger">Hapus</button>
+                </form>
+            @endif
+        </div>
+    @endif
+</div>
+
+@if($product->exists && ($productUsageCount ?? 0) > 0)
+    <div class="lifecycle-note small">Produk ini sudah dipakai oleh {{ $productUsageCount }} item order sehingga tidak dapat dihapus permanen. Gunakan <strong>Nonaktifkan</strong> jika produk tidak dijual lagi.</div>
+@endif
+
+@if($product->exists && $product->preorder?->isOpen())
+    <div class="actions" style="margin-bottom:18px">
         <form method="post" action="{{ route('owner.products.close', $product) }}" data-confirm="Tutup PO ini lebih awal? Customer tidak bisa membuat order baru setelah ditutup.">
             @csrf
             <button class="btn btn-danger">Tutup PO</button>
         </form>
-    @endif
-</div>
+    </div>
+@endif
 
 <form class="card" method="post" enctype="multipart/form-data" action="{{ $product->exists ? route('owner.products.update', $product) : route('owner.products.store') }}">
     @csrf
-    @if($product->exists) @method('put') @endif
+    @if($product->exists)
+        @method('put')
+    @endif
 
     <div class="form-section-title">Informasi utama</div>
     <div class="form-grid">
@@ -138,7 +162,9 @@
                         <summary>
                             <div>
                                 <strong>{{ $v->name }}</strong>
-                                @if($v->details)<div class="small muted">{{ $v->details }}</div>@endif
+                                @if($v->details)
+                                    <div class="small muted">{{ $v->details }}</div>
+                                @endif
                             </div>
                             <div class="variant-summary-meta">
                                 @if($v->estimated_weight_grams !== null)<span class="badge gray">Est {{ number_format($v->estimated_weight_grams,0,',','.') }}gr</span>@endif
@@ -165,10 +191,22 @@
                                 <button class="btn btn-primary btn-sm">Simpan perubahan</button>
                             </div>
                         </form>
-                        <form method="post" action="{{ route('owner.products.variant.toggle', [$product, $v]) }}" data-confirm="{{ $v->active ? 'Nonaktifkan variasi ini?' : 'Aktifkan kembali variasi ini?' }}" style="margin-top:10px">
-                            @csrf
-                            <button class="btn btn-sm {{ $v->active ? 'btn-danger' : 'btn-soft' }}">{{ $v->active ? 'Nonaktifkan variasi' : 'Aktifkan variasi' }}</button>
-                        </form>
+                        <div class="actions" style="margin-top:10px">
+                            <form method="post" action="{{ route('owner.products.variant.toggle', [$product, $v]) }}" data-confirm="{{ $v->active ? 'Nonaktifkan variasi ini? Variasi tidak dapat dipilih untuk order baru, tetapi order lama tetap aman.' : 'Aktifkan kembali variasi ini?' }}">
+                                @csrf
+                                <button class="btn btn-sm {{ $v->active ? 'btn-danger' : 'btn-soft' }}">{{ $v->active ? 'Nonaktifkan variasi' : 'Aktifkan variasi' }}</button>
+                            </form>
+                            @if((int) data_get($variantUsage ?? [], $v->id, 0) === 0)
+                                <form method="post" action="{{ route('owner.products.variant.destroy', [$product, $v]) }}" data-confirm-title="Hapus permanen" data-confirm="Hapus variasi '{{ $v->name }}' secara permanen? Variasi ini belum pernah dipakai dalam order. Tindakan tidak dapat dibatalkan.">
+                                    @csrf
+                                    @method('delete')
+                                    <button class="btn btn-sm btn-danger">Hapus variasi</button>
+                                </form>
+                            @endif
+                        </div>
+                        @if((int) data_get($variantUsage ?? [], $v->id, 0) > 0)
+                            <div class="delete-note">Variasi ini sudah dipakai oleh {{ data_get($variantUsage, $v->id) }} item order sehingga hanya dapat dinonaktifkan.</div>
+                        @endif
                     </details>
                 @endforeach
             </div>

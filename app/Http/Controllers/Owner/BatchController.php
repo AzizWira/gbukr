@@ -3,9 +3,10 @@
 namespace App\Http\Controllers\Owner;
 
 use App\Http\Controllers\Controller;
-use App\Models\{Batch, Country, GoGroup, Invoice, Order, OrderItem, User, Warehouse};
+use App\Models\{Batch, Country, GoGroup, Invoice, Order, OrderItem, Shipment, User, Warehouse};
 use App\Notifications\InvoiceCreatedNotification;
 use App\Services\{BatchTrackingService, OrderStatusService};
+use App\Support\Search;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -16,14 +17,19 @@ class BatchController extends Controller
 {
     public function index(Request $request)
     {
-        $query = trim((string) $request->query('q', ''));
+        $query = Search::term($request->query('q'));
 
         $batches = Batch::with(['country', 'goGroup', 'warehouse'])
-            ->when($query !== '', fn ($q) => $q->where(function ($sub) use ($query) {
-                $sub->where('code', 'like', '%' . $query . '%')
-                    ->orWhere('name', 'like', '%' . $query . '%')
-                    ->orWhere('tracking_number', 'like', '%' . $query . '%');
-            }))
+            ->when($query !== '', function ($builder) use ($query) {
+                $builder->where(function ($sub) use ($query) {
+                    Search::code($sub, 'code', $query)
+                        ->orWhere('name', 'like', '%' . $query . '%')
+                        ->orWhere('tracking_number', 'like', '%' . $query . '%')
+                        ->orWhereHas('goGroup', fn ($go) => $go->where('name', 'like', '%' . $query . '%'))
+                        ->orWhereHas('country', fn ($country) => $country->where('name', 'like', '%' . $query . '%')->orWhere('code', 'like', '%' . $query . '%'))
+                        ->orWhereHas('warehouse', fn ($warehouse) => $warehouse->where('code', 'like', '%' . $query . '%')->orWhere('name', 'like', '%' . $query . '%'));
+                });
+            })
             ->latest()
             ->paginate(20)
             ->withQueryString();
@@ -44,13 +50,16 @@ class BatchController extends Controller
     {
         $data = $this->validateBatch($request);
         $country = Country::where('active', true)->findOrFail($data['country_id']);
+        $group = !empty($data['go_group_id'])
+            ? GoGroup::where('status', 'active')->findOrFail($data['go_group_id'])
+            : null;
 
-        $batch = DB::transaction(function () use ($data, $country, $tracking) {
+        $batch = DB::transaction(function () use ($data, $country, $group, $tracking) {
             $batch = Batch::create([
-                'go_group_id' => $data['go_group_id'] ?? null,
+                'go_group_id' => $group?->id,
                 'country_id' => $country->id,
                 'warehouse_id' => $data['warehouse_id'] ?? null,
-                'code' => Batch::generateCode($country->code),
+                'code' => Batch::generateCode($country->code, $group?->name ?: $data['name']),
                 'name' => trim($data['name']),
                 'description' => $data['description'] ?? null,
                 'tracking_number' => $data['tracking_number'] ?? null,
@@ -65,6 +74,58 @@ class BatchController extends Controller
         return redirect()
             ->route('owner.batches.show', $batch)
             ->with('success', 'Batch ' . $batch->code . ' berhasil dibuat.');
+    }
+
+    public function edit(Batch $batch)
+    {
+        return view('owner.batches.form', [
+            'batch' => $batch,
+            'countries' => Country::where('active', true)->orderBy('name')->get(),
+            'groups' => GoGroup::where('status', 'active')->orderBy('name')->get(),
+            'warehouses' => Warehouse::with('country')->where('active', true)->orderBy('code')->get(),
+        ]);
+    }
+
+    public function update(Request $request, Batch $batch, BatchTrackingService $tracking)
+    {
+        $data = $this->validateBatch($request);
+
+        if ($batch->orders()->exists()) {
+            if ((int) $data['country_id'] !== (int) $batch->country_id) {
+                throw ValidationException::withMessages(['country_id' => 'Negara Batch yang sudah memiliki order tidak dapat diubah.']);
+            }
+            if ((int) ($data['go_group_id'] ?? 0) !== (int) ($batch->go_group_id ?? 0)) {
+                throw ValidationException::withMessages(['go_group_id' => 'GO Batch yang sudah memiliki order tidak dapat diubah.']);
+            }
+        }
+
+        DB::transaction(function () use ($batch, $data, $tracking) {
+            $batch->update([
+                'go_group_id' => $data['go_group_id'] ?? null,
+                'country_id' => $data['country_id'],
+                'warehouse_id' => $data['warehouse_id'] ?? null,
+                'name' => trim($data['name']),
+                'description' => $data['description'] ?? null,
+                'tracking_number' => $data['tracking_number'] ?? null,
+            ]);
+            $tracking->sync($batch->fresh(['country', 'orders.items']));
+        });
+
+        return redirect()->route('owner.batches.show', $batch)->with('success', 'Data Batch berhasil diperbarui.');
+    }
+
+    public function destroy(Batch $batch)
+    {
+        if ($batch->orders()->exists()) {
+            throw ValidationException::withMessages(['batch' => 'Batch yang sudah memiliki order tidak dapat dihapus. Ubah datanya atau statusnya agar histori tetap aman.']);
+        }
+
+        DB::transaction(function () use ($batch) {
+            Shipment::where('source_type', 'batch')->where('source_id', $batch->id)->delete();
+            $batch->delete();
+        });
+
+        return redirect()->route('owner.batches.index')->with('success', 'Batch kosong berhasil dihapus.');
     }
 
     public function show(Batch $batch, BatchTrackingService $tracking)
