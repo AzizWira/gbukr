@@ -5,7 +5,11 @@
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="csrf-token" content="{{ csrf_token() }}">
     <title>@yield('title','GBUKPOP x KRJASTIP')</title>
-    <link rel="stylesheet" href="{{ asset('css/app.css') }}">
+    @php
+        $cssVersion = file_exists(public_path('css/app.css')) ? filemtime(public_path('css/app.css')) : '1';
+        $jsVersion = file_exists(public_path('js/app.js')) ? filemtime(public_path('js/app.js')) : '1';
+    @endphp
+    <link rel="stylesheet" href="{{ asset('css/app.css') }}?v={{ $cssVersion }}">
 </head>
 <body>
 <header class="topbar">
@@ -133,7 +137,7 @@
     </div>
 </dialog>
 
-<script src="{{ asset('js/app.js') }}" defer></script>
+<script src="{{ asset('js/app.js') }}?v={{ $jsVersion }}" defer></script>
 @stack('scripts')
 </body>
 </html>

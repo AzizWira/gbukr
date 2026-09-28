@@ -182,3 +182,8 @@ Untuk production:
 ```env
 SEED_DEMO_DATA=false
 ```
+
+
+## Catatan deployment asset
+
+Layout memberi version query otomatis pada `css/app.css` dan `js/app.js` berdasarkan waktu modifikasi file. Pada struktur Hostinger yang memisahkan `app/public` dan `public_html`, tetap sinkronkan CSS/JS/images ke `public_html` setelah `git pull`; query version mencegah browser/CDN mempertahankan asset versi sebelumnya.

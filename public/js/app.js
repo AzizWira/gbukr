@@ -621,8 +621,8 @@
   });
 
 
-  // v1.0.25: Cleanup import direview di modal scrollable dengan aksi Pilih semua. Data yang berubah tidak diblokir;
-  // Owner memilih satu per satu dan backend menentukan direct delete / notify / approval.
+  // v1.0.28: Cleanup import mendukung review dalam jumlah besar. Pilihan dikirim sebagai satu JSON payload
+  // agar tidak terkena max_input_vars PHP; backend memproses order per chunk.
   const cleanupDialog=q('#import-cleanup-dialog');
   const cleanupForm=q('[data-import-cleanup-form]',cleanupDialog||document);
   const cleanupBody=q('[data-cleanup-body]',cleanupDialog||document);
@@ -633,15 +633,17 @@
   const cleanupReason=q('[data-cleanup-reason]',cleanupDialog||document);
   const cleanupSelection=q('[data-cleanup-selection]',cleanupDialog||document);
   const cleanupSelectAll=q('[data-cleanup-select-all]',cleanupDialog||document);
+  const cleanupSelectedJson=q('[data-cleanup-selected-json]',cleanupDialog||document);
   let cleanupReviewData=[];
 
   const escapeHtml=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[char]));
-  const cleanupSelected=()=>qa('input[name="review_order_ids[]"]:checked',cleanupForm||document);
+  const cleanupSelected=()=>qa('input[data-cleanup-review-id]:checked',cleanupForm||document);
   const syncCleanupSelection=()=>{
     const selected=cleanupSelected();
     const count=selected.length;
-    const all=qa('input[name="review_order_ids[]"]',cleanupForm||document);
+    const all=qa('input[data-cleanup-review-id]',cleanupForm||document);
     if(cleanupSelection) cleanupSelection.textContent=`${count} dari ${all.length} data review dipilih`;
+    if(cleanupSelectedJson) cleanupSelectedJson.value=JSON.stringify(selected.map(input=>Number(input.value)).filter(Number.isInteger));
     if(cleanupReason) cleanupReason.required=count>0;
     if(cleanupSelectAll){
       const allSelected=all.length>0 && count===all.length;
@@ -676,7 +678,7 @@
       const reasons=(row.reasons||[]).map(reason=>`<li>${escapeHtml(reason)}</li>`).join('');
       const linked=!!row.linked;
       return `<label class="cleanup-review-item" data-cleanup-row data-search="${escapeHtml([row.order_number,row.customer,row.batch,row.items].join(' '))}" data-linked="${linked?'1':'0'}" data-payment="${escapeHtml(row.payment_state||'none')}" data-changed="${row.changed?'1':'0'}">
-        <input type="checkbox" name="review_order_ids[]" value="${Number(row.id)}">
+        <input type="checkbox" data-cleanup-review-id value="${Number(row.id)}">
         <div>
           <div class="cleanup-review-head"><div><strong>${escapeHtml(row.order_number)}</strong><div class="small muted">${escapeHtml(row.customer)} · Batch ${escapeHtml(row.batch)}</div></div><span class="badge ${row.action==='approval_required'?'warn':(linked?'ok':'gray')}">${escapeHtml(row.action_label)}</span></div>
           <div class="cleanup-review-meta"><span class="badge gray">${escapeHtml(row.account_status)}</span><span class="badge gray">${escapeHtml(row.payment_status)}</span>${row.changed?'<span class="badge warn">Sudah berubah</span>':''}${row.new_activity?'<span class="badge warn">Aktivitas baru</span>':''}</div>
@@ -690,7 +692,7 @@
       ${safe.length?`<div class="cleanup-safe-list"><strong>Data aman</strong><div class="small muted">Belum terhubung akun, tidak berubah, tidak ada aktivitas baru, dan belum ada pembayaran. Data ini ikut dibersihkan otomatis.</div>${safeExample}${safe.length>5?`<div class="small muted">+ ${safe.length-5} data lainnya</div>`:''}</div>`:''}
       <div class="section-head"><div><h3>Review manual</h3><p>Pilih satu per satu. Setiap data diproses sesuai status akun dan pembayaran yang tampil di bawah.</p></div></div>
       <div class="cleanup-review-list">${rows||'<div class="empty">Tidak ada data yang memerlukan review manual.</div>'}</div>`;
-    qa('input[name="review_order_ids[]"]',cleanupBody).forEach(input=>input.addEventListener('change',syncCleanupSelection));
+    qa('input[data-cleanup-review-id]',cleanupBody).forEach(input=>input.addEventListener('change',syncCleanupSelection));
     syncCleanupSelection();
     applyCleanupFilter();
   };
@@ -718,12 +720,13 @@
   cleanupSearch?.addEventListener('input',applyCleanupFilter);
   cleanupFilter?.addEventListener('change',applyCleanupFilter);
   cleanupSelectAll?.addEventListener('click',()=>{
-    const inputs=qa('input[name="review_order_ids[]"]',cleanupForm||document);
+    const inputs=qa('input[data-cleanup-review-id]',cleanupForm||document);
     const shouldSelect=inputs.some(input=>!input.checked);
     inputs.forEach(input=>{input.checked=shouldSelect;});
     syncCleanupSelection();
   });
   cleanupForm?.addEventListener('submit',event=>{
+    syncCleanupSelection();
     const selected=cleanupSelected().length;
     if(selected>0 && !cleanupReason?.value.trim()){
       event.preventDefault(); event.stopImmediatePropagation();

@@ -15,18 +15,47 @@
             @csrf
             <button class="btn {{ $customer->active?'btn-danger':'btn-soft' }}">{{ $customer->active?'Nonaktifkan customer':'Aktifkan customer' }}</button>
         </form>
-        @if(($customerUsageCount ?? 0) === 0 && !$customer->admin_enabled)
-            <form method="post" action="{{ route('owner.customers.destroy',$customer) }}" data-confirm-title="Hapus permanen" data-confirm="Hapus customer '{{ $customer->name }}' secara permanen? Akun ini belum memiliki order, tagihan, atau pembayaran dan tidak memiliki akses Admin. Profil serta session akun akan ikut dihapus. Tindakan tidak dapat dibatalkan.">
+        @if(($customerDeletionState['can_hard_delete'] ?? false))
+            @php
+                $archivedOrders = (int)($customerDeletionState['archived_order_count'] ?? 0);
+                $archivedInvoices = (int)($customerDeletionState['archived_invoice_count'] ?? 0);
+                $archivedPayments = (int)($customerDeletionState['archived_payment_count'] ?? 0);
+                $hasArchivedResidue = ($archivedOrders + $archivedInvoices + $archivedPayments) > 0;
+                $deleteConfirm = $hasArchivedResidue
+                    ? "Hapus customer '{$customer->name}' secara permanen? Tidak ada transaksi aktif atau histori finansial yang masih dilindungi. {$archivedOrders} Order, {$archivedInvoices} Tagihan, dan {$archivedPayments} Pembayaran yang sudah dihapus dari operasional akan ikut dibersihkan. Jejak audit approval/penghapusan tetap disimpan. Tindakan tidak dapat dibatalkan."
+                    : "Hapus customer '{$customer->name}' secara permanen? Akun ini belum memiliki order, tagihan, atau pembayaran dan tidak memiliki akses Admin. Profil serta session akun akan ikut dihapus. Tindakan tidak dapat dibatalkan.";
+            @endphp
+            <form method="post" action="{{ route('owner.customers.destroy',$customer) }}" data-confirm-title="Hapus permanen" data-confirm="{{ $deleteConfirm }}">
                 @csrf
                 @method('delete')
                 <button class="btn btn-danger">Hapus customer</button>
             </form>
         @endif
     </div>
-    @if(($customerUsageCount ?? 0) > 0)
-        <div class="delete-note">Customer tidak dapat dihapus permanen karena sudah mempunyai histori transaksi. Gunakan Nonaktifkan agar histori order, tagihan, dan pembayaran tetap utuh.</div>
+
+    @if(($customerDeletionState['can_hard_delete'] ?? false) && (($customerDeletionState['archived_order_count'] ?? 0) + ($customerDeletionState['archived_invoice_count'] ?? 0) + ($customerDeletionState['archived_payment_count'] ?? 0) > 0))
+        <div class="delete-note">
+            Customer tidak mempunyai transaksi aktif atau histori finansial yang masih dilindungi. Data yang sudah dihapus dari operasional dapat ikut dibersihkan permanen; audit approval/penghapusan tetap tersimpan.
+            <div class="small muted" style="margin-top:6px">
+                Akan dibersihkan: {{ $customerDeletionState['archived_order_count'] ?? 0 }} order · {{ $customerDeletionState['archived_invoice_count'] ?? 0 }} tagihan · {{ $customerDeletionState['archived_payment_count'] ?? 0 }} pembayaran
+            </div>
+        </div>
     @elseif($customer->admin_enabled)
         <div class="delete-note">Customer masih memiliki akses Admin. Cabut akses Admin terlebih dahulu jika akun benar-benar ingin dihapus.</div>
+    @elseif($customerDeletionState['has_active_transactions'] ?? false)
+        <div class="delete-note">
+            Customer belum dapat dihapus karena masih mempunyai Order atau Tagihan aktif. Hapus/selesaikan data aktif terlebih dahulu, atau gunakan Nonaktifkan jika akun masih perlu dipertahankan.
+            <div class="small muted" style="margin-top:6px">
+                Aktif: {{ $customerDeletionState['active_order_count'] ?? 0 }} order · {{ $customerDeletionState['active_invoice_count'] ?? 0 }} tagihan
+            </div>
+        </div>
+    @elseif($customerDeletionState['has_protected_financial_history'] ?? false)
+        <div class="delete-note">
+            Customer belum dapat dihapus permanen karena masih mempunyai histori finansial yang belum pernah disetujui untuk dihapus. Gunakan Nonaktifkan atau tinjau transaksi terkait terlebih dahulu.
+            <div class="small muted" style="margin-top:6px">
+                Histori tersimpan: {{ $deletionUsage['order'] ?? 0 }} order · {{ $deletionUsage['tagihan'] ?? 0 }} tagihan · {{ $deletionUsage['pembayaran'] ?? 0 }} pembayaran
+            </div>
+        </div>
     @endif
 </div>
 <div class="card" style="grid-column:1/-1"><h3>Order terakhir</h3>@forelse($customer->orders->sortByDesc('created_at')->take(15) as $o)<div class="summary-row"><div><strong>{{ $o->order_number }}</strong><div class="small muted">{{ $o->items->first()?->item_name }}</div></div><a class="btn btn-soft btn-sm" href="{{ route('owner.orders.show',$o) }}">{{ \App\Services\OrderStatusService::label($o->status) }}</a></div>@empty<div class="empty">Belum ada order.</div>@endforelse</div>

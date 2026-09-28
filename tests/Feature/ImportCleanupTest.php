@@ -62,4 +62,22 @@ class ImportCleanupTest extends TestCase
             ->assertSee('data-cleanup-select-all', false);
     }
 
+    public function test_cleanup_selection_payload_is_not_limited_to_500_items(): void
+    {
+        [$owner,,$go,$run,$batch]=$this->base('large-review.xlsx');
+        $customer=User::create(['name'=>'Legacy Large Review','email'=>'legacy+'.uniqid().'@placeholder.local','password'=>null,'role'=>'customer','active'=>true]);
+        $order=Order::create(['customer_id'=>$customer->id,'go_group_id'=>$go->id,'batch_id'=>$batch->id,'import_run_id'=>$run->id,'source_type'=>'batch','order_number'=>'LEG-LARGE-REVIEW','status'=>'ordered','notes'=>'Migrasi large-review.xlsx | TAGIHAN CH | Ref: 1']);
+
+        $ids=array_fill(0, 650, $order->id);
+
+        $this->actingAs($owner)
+            ->delete(route('owner.import.cleanup',$run),[
+                'review_order_ids_json'=>json_encode($ids),
+                'reason'=>'Cleanup review dalam jumlah besar',
+            ])
+            ->assertSessionHasNoErrors();
+
+        $this->assertDatabaseMissing('orders',['id'=>$order->id]);
+    }
+
 }

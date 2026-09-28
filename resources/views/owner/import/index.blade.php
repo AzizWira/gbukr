@@ -144,6 +144,7 @@
     <form method="post" class="review-dialog-shell" data-import-cleanup-form data-confirm-title="Proses cleanup import?" data-confirm="Data aman akan dibersihkan. Data review yang dipilih akan diproses sesuai status akun dan pembayaran masing-masing." data-no-dirty-guard>
         @csrf
         @method('delete')
+        <input type="hidden" name="review_order_ids_json" value="[]" data-cleanup-selected-json>
         <div class="review-dialog-header">
             <div><div class="eyebrow">CLEANUP IMPORT</div><h3 data-cleanup-title>Tinjau Data Sebelum Cleanup</h3><p class="small muted" data-cleanup-subtitle>Memuat data…</p></div>
             <button class="btn btn-neutral btn-sm" type="button" data-dialog-close>Tutup</button>

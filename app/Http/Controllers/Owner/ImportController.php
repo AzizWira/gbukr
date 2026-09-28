@@ -17,6 +17,7 @@ class ImportController extends Controller
 {
     private const IMPORT_DISK = 'local';
     private const IMPORT_DIR = 'imports';
+    private const CLEANUP_CHUNK_SIZE = 100;
 
     public function index(Request $request)
     {
@@ -256,13 +257,17 @@ class ImportController extends Controller
             return response()->json(['message'=>'Import yang masih berjalan atau sudah selesai dibersihkan tidak dapat direview.'], 422);
         }
 
-        $orders = $this->ordersForRun($run)->with(['customer.customerProfile','items','invoices.payments','batch'])->get();
-        $safe=[]; $review=[];
-        foreach ($orders as $order) {
-            $state=$cleanup->importReview($order);
-            $row=$this->cleanupReviewRow($order,$state);
-            if ($state['auto_safe']) $safe[]=$row; else $review[]=$row;
-        }
+        $safe=[];
+        $review=[];
+        $this->ordersForRun($run)
+            ->with(['customer.customerProfile','items','invoices.payments','batch'])
+            ->chunkById(self::CLEANUP_CHUNK_SIZE, function ($orders) use ($cleanup, &$safe, &$review): void {
+                foreach ($orders as $order) {
+                    $state=$cleanup->importReview($order);
+                    $row=$this->cleanupReviewRow($order,$state);
+                    if ($state['auto_safe']) $safe[]=$row; else $review[]=$row;
+                }
+            });
 
         return response()->json([
             'run_id'=>$run->id,
@@ -283,51 +288,85 @@ class ImportController extends Controller
         }
 
         $data=$request->validate([
-            'review_order_ids'=>['nullable','array','max:500'],
+            'review_order_ids'=>['nullable','array'],
             'review_order_ids.*'=>['integer'],
+            'review_order_ids_json'=>['nullable','string'],
             'reason'=>['nullable','string','max:500'],
         ]);
+        $selectedIds=$this->selectedCleanupReviewIds($data);
+        $selectedLookup=array_fill_keys($selectedIds,true);
 
-        $orders=$this->ordersForRun($run)->with(['customer.customerProfile','items','invoices.payments','batch'])->get();
-        if ($orders->isEmpty()) {
+        $safeIds=[];
+        $validSelected=[];
+        $orderCount=0;
+        $this->ordersForRun($run)
+            ->with(['customer.customerProfile','items','invoices.payments','batch'])
+            ->chunkById(self::CLEANUP_CHUNK_SIZE, function ($orders) use ($cleanup, $selectedLookup, &$safeIds, &$validSelected, &$orderCount): void {
+                foreach ($orders as $order) {
+                    $orderCount++;
+                    $state=$cleanup->importReview($order);
+                    if ($state['auto_safe']) {
+                        $safeIds[]=(int)$order->id;
+                    } elseif (isset($selectedLookup[(int)$order->id])) {
+                        $validSelected[(int)$order->id]=true;
+                    }
+                }
+            });
+
+        if ($orderCount===0) {
             $run->update(['status'=>'rolled_back']);
             return back()->with('success','Tidak ada lagi data aktif dari import ini. Riwayat import ditandai sudah dibersihkan.');
         }
 
-        $safe=collect(); $review=collect();
-        foreach($orders as $order){
-            $state=$cleanup->importReview($order);
-            if($state['auto_safe']) $safe->push($order); else $review->push($order);
-        }
-        $selectedIds=collect($data['review_order_ids'] ?? [])->map(fn($id)=>(int)$id)->unique();
-        $selected=$review->whereIn('id',$selectedIds);
-        if($selectedIds->count() !== $selected->count()) {
+        if (count($selectedIds) !== count($validSelected)) {
             throw ValidationException::withMessages(['import'=>'Ada data pilihan yang bukan bagian dari review import ini. Muat ulang popup lalu coba lagi.']);
         }
-        if($selected->isNotEmpty() && blank($data['reason'] ?? null)) {
+        if ($selectedIds && blank($data['reason'] ?? null)) {
             throw ValidationException::withMessages(['reason'=>'Isi alasan cleanup untuk data yang ditinjau manual. Alasan akan masuk audit dan dapat ditampilkan ke customer bila approval diperlukan.']);
         }
-        if($safe->isEmpty() && $selected->isEmpty()) {
+        if (!$safeIds && !$selectedIds) {
             throw ValidationException::withMessages(['import'=>'Tidak ada data aman yang dapat dibersihkan otomatis. Pilih minimal satu data pada daftar review manual.']);
         }
 
-        $batchIds=$safe->concat($selected)->pluck('batch_id')->filter()->unique()->values();
-        $deleted=0; $approval=0; $notified=0;
-        foreach($safe as $order){
-            $result=$cleanup->processDeletion($order,$request->user(),'Cleanup otomatis hasil import '.$run->original_name,'import_cleanup',$run);
-            if($result['status']==='deleted') $deleted++;
+        $batchIds=[];
+        $deleted=0;
+        $approval=0;
+        $notified=0;
+
+        foreach (array_chunk($safeIds,self::CLEANUP_CHUNK_SIZE) as $chunkIds) {
+            $orders=Order::whereIn('id',$chunkIds)->with(['customer.customerProfile','items','invoices.payments','batch'])->get();
+            foreach ($orders as $order) {
+                if ($order->batch_id) $batchIds[(int)$order->batch_id]=true;
+                $result=$cleanup->processDeletion($order,$request->user(),'Cleanup otomatis hasil import '.$run->original_name,'import_cleanup',$run);
+                if ($result['status']==='pending_approval') $approval++;
+                else $deleted++;
+            }
+            unset($orders);
         }
-        foreach($selected as $order){
-            $result=$cleanup->processDeletion($order,$request->user(),$data['reason'] ?? null,'import_cleanup',$run);
-            if($result['status']==='pending_approval') $approval++;
-            else { $deleted++; if($result['policy']['linked']) $notified++; }
+
+        foreach (array_chunk($selectedIds,self::CLEANUP_CHUNK_SIZE) as $chunkIds) {
+            $orders=Order::whereIn('id',$chunkIds)->with(['customer.customerProfile','items','invoices.payments','batch'])->get();
+            foreach ($orders as $order) {
+                if ($order->batch_id) $batchIds[(int)$order->batch_id]=true;
+                $result=$cleanup->processDeletion($order,$request->user(),$data['reason'] ?? null,'import_cleanup',$run);
+                if ($result['status']==='pending_approval') {
+                    $approval++;
+                } else {
+                    $deleted++;
+                    if ($result['policy']['linked']) $notified++;
+                }
+            }
+            unset($orders);
         }
 
         $removedBatches=0;
-        foreach(Batch::whereIn('id',$batchIds)->get() as $batch){
-            if(!$batch->orders()->exists() && str_contains($batch->code,'-LEG-')){
-                Shipment::where('source_type','batch')->where('source_id',$batch->id)->delete();
-                $batch->delete(); $removedBatches++;
+        foreach (array_chunk(array_keys($batchIds),self::CLEANUP_CHUNK_SIZE) as $chunkIds) {
+            foreach (Batch::whereIn('id',$chunkIds)->get() as $batch) {
+                if(!$batch->orders()->exists() && str_contains($batch->code,'-LEG-')){
+                    Shipment::where('source_type','batch')->where('source_id',$batch->id)->delete();
+                    $batch->delete();
+                    $removedBatches++;
+                }
             }
         }
 
@@ -338,6 +377,7 @@ class ImportController extends Controller
         $summary['cleanup_notified_customers']=($summary['cleanup_notified_customers'] ?? 0)+$notified;
         $summary['cleanup_batches']=($summary['cleanup_batches'] ?? 0)+$removedBatches;
         $summary['cleanup_remaining_orders']=$remaining;
+        $summary['cleanup_chunk_size']=self::CLEANUP_CHUNK_SIZE;
         $run->update(['status'=>$remaining===0?'rolled_back':$run->status,'summary'=>$summary]);
 
         $message=$deleted.' order berhasil dibersihkan.';
@@ -345,6 +385,38 @@ class ImportController extends Controller
         if($removedBatches>0) $message.=' '.$removedBatches.' Batch legacy kosong ikut dihapus.';
         if($remaining>0) $message.=' Masih ada '.$remaining.' order yang perlu ditinjau/menunggu approval.';
         return back()->with('success',$message);
+    }
+
+    private function selectedCleanupReviewIds(array $data): array
+    {
+        $ids=$data['review_order_ids'] ?? [];
+        $json=trim((string)($data['review_order_ids_json'] ?? ''));
+
+        if ($json!=='') {
+            try {
+                $decoded=json_decode($json,true,512,JSON_THROW_ON_ERROR);
+            } catch (\JsonException) {
+                throw ValidationException::withMessages(['import'=>'Daftar data cleanup tidak valid. Muat ulang popup lalu pilih data kembali.']);
+            }
+            if (!is_array($decoded)) {
+                throw ValidationException::withMessages(['import'=>'Daftar data cleanup tidak valid. Muat ulang popup lalu pilih data kembali.']);
+            }
+            $ids=$decoded;
+        }
+
+        $normalized=[];
+        foreach ($ids as $id) {
+            if (is_int($id) || (is_string($id) && ctype_digit($id))) {
+                $id=(int)$id;
+                if ($id>0) {
+                    $normalized[$id]=$id;
+                    continue;
+                }
+            }
+            throw ValidationException::withMessages(['import'=>'Ada ID data cleanup yang tidak valid. Muat ulang popup lalu coba lagi.']);
+        }
+
+        return array_values($normalized);
     }
 
     private function ordersForRun(ImportRun $run)

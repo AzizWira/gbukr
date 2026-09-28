@@ -55,19 +55,22 @@ class OrderCleanupUxTest extends TestCase
         $this->assertSame('pending',$request->status);
 
         $this->actingAs($customer)->post(route('customer.deletion-requests.approve',$request))->assertSessionHasNoErrors();
-        $this->assertSoftDeleted('orders',['id'=>$order->id]);
-        $this->assertSoftDeleted('invoices',['id'=>$invoice->id]);
-        $this->assertSoftDeleted('payments',['id'=>$payment->id]);
-        $this->assertSame('approved',$request->fresh()->status);
+        $this->assertDatabaseMissing('orders',['id'=>$order->id]);
+        $this->assertDatabaseMissing('invoices',['id'=>$invoice->id]);
+        $this->assertDatabaseMissing('payments',['id'=>$payment->id]);
+        $freshRequest=$request->fresh();
+        $this->assertSame('approved',$freshRequest->status);
+        $this->assertNull($freshRequest->order_id);
+        $this->assertSame($order->order_number,$freshRequest->snapshot['order_number']);
     }
 
     public function test_unlinked_order_with_financial_history_can_be_deleted_without_customer_approval_but_is_soft_deleted(): void
     {
         [, $order,$invoice,$payment]=$this->batchOrder(true,true);
         $this->actingAs($this->owner())->delete(route('owner.orders.destroy',$order),['reason'=>'Cleanup data legacy'])->assertSessionHasNoErrors();
-        $this->assertSoftDeleted('orders',['id'=>$order->id]);
-        $this->assertSoftDeleted('invoices',['id'=>$invoice->id]);
-        $this->assertSoftDeleted('payments',['id'=>$payment->id]);
+        $this->assertDatabaseMissing('orders',['id'=>$order->id]);
+        $this->assertDatabaseMissing('invoices',['id'=>$invoice->id]);
+        $this->assertDatabaseMissing('payments',['id'=>$payment->id]);
         $this->assertDatabaseHas('order_deletion_requests',['status'=>'executed','requires_customer_approval'=>0]);
     }
 
