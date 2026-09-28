@@ -10,6 +10,8 @@
     </div>
 </div>
 
+<div class="import-steps"><span class="active">1 Upload</span><span class="{{ isset($preview) ? 'active' : '' }}">2 Review</span><span>3 Pilih GO</span><span>4 Import</span><span>5 Hasil</span></div>
+
 <div class="grid grid-2">
     <form class="card" method="post" action="{{ route('owner.import.preview') }}" enctype="multipart/form-data" data-loading-text="Membaca workbook…">
         @csrf
@@ -70,6 +72,15 @@
                 @error('go_group_id')<div class="help" style="color:var(--danger);margin-top:8px">{{ $message }}</div>@enderror
                 @error('new_go_name')<div class="help" style="color:var(--danger);margin-top:8px">{{ $message }}</div>@enderror
 
+                <div class="import-review-box">
+                    <strong>Sebelum dilanjutkan</strong>
+                    <ul>
+                        <li>{{ number_format($preview['estimated_rows'] ?? 0,0,',','.') }} baris akan diperiksa.</li>
+                        <li>{{ $preview['recognized_count'] ?? 0 }} sheet dikenali importer.</li>
+                        <li>Baris tanpa kode Batch akan dibuatkan Batch legacy otomatis.</li>
+                        <li>File asli tetap disimpan sebagai arsip dan dapat diunduh kembali.</li>
+                    </ul>
+                </div>
                 <button class="btn btn-primary" style="margin-top:16px">Jalankan import</button>
             </form>
         @else
@@ -79,6 +90,9 @@
 </div>
 
 <div class="card" style="margin-top:18px">
+    @error('import')
+        <div class="alert error" style="margin-bottom:14px">{{ $message }}</div>
+    @enderror
     <div class="section-head">
         <div>
             <h3>Riwayat import</h3>
@@ -93,7 +107,7 @@
                     <strong>{{ $run->original_name }}</strong>
                     <div class="small muted">GO: {{ $run->goGroup?->name ?: '-' }} · dibuat {{ $run->created_at->translatedFormat('d F Y, H.i') }}</div>
                 </div>
-                <span class="badge import-run-status {{ $run->status === 'completed' ? 'ok' : ($run->status === 'failed' ? 'danger' : 'warn') }}">{{ strtoupper($run->status) }}</span>
+                <span class="badge import-run-status {{ $run->status === 'completed' ? 'ok' : ($run->status === 'failed' ? 'danger' : ($run->status === 'rolled_back' ? 'gray' : 'warn')) }}" data-import-status="{{ $run->status }}">{{ $run->statusLabel() }}</span>
             </div>
             <div class="import-progress" aria-label="Progress import">
                 <span class="import-progress-bar" style="width:{{ $run->progressPercent() }}%"></span>
@@ -103,11 +117,26 @@
                 @if($run->status === 'completed' && $run->summary)
                     · {{ $run->summary['orders'] ?? 0 }} order · {{ $run->summary['invoices'] ?? 0 }} tagihan · {{ $run->summary['adjustments'] ?? 0 }} kekurangan
                 @elseif($run->status === 'failed')
-                    · {{ $run->error_message }}
+                    · {{ $run->friendlyErrorMessage() }}
                 @endif
             </div>
             <div class="actions" style="margin-top:10px">
                 <a class="btn btn-neutral btn-sm" href="{{ route('owner.import.source', $run) }}" data-no-dirty-guard>Download file asli</a>
+                @if($run->status === 'failed')
+                    <form method="post" action="{{ route('owner.import.retry',$run) }}" data-confirm-title="Coba ulang import?" data-confirm="Import akan dimulai lagi dari file yang sama. Data yang sudah sempat masuk menggunakan identitas legacy yang sama sehingga akan diperbarui, bukan digandakan." data-loading-text="Menjadwalkan ulang…">
+                        @csrf
+                        <button class="btn btn-primary btn-sm" type="submit">Coba lagi</button>
+                    </form>
+                @endif
+                @if(in_array($run->status,['completed','failed'],true))
+                    <form method="post" action="{{ route('owner.import.cleanup',$run) }}" data-confirm-title="Cleanup hasil import?" data-confirm="Order tanpa histori pembayaran akan dihapus. Order yang sudah memiliki histori pembayaran hanya akan dikeluarkan dari Batch agar tagihan dan pembayaran tetap tersimpan. Batch legacy yang kemudian kosong akan dihapus. File workbook asli tetap disimpan.">
+                        @csrf
+                        @method('delete')
+                        <button class="btn btn-danger btn-sm" type="submit">Cleanup hasil import</button>
+                    </form>
+                @elseif($run->status === 'rolled_back')
+                    <span class="badge gray">Hasil import sudah dibersihkan</span>
+                @endif
             </div>
         </div>
     @empty

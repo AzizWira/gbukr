@@ -35,7 +35,7 @@ class ProductController extends Controller
             }))
             ->when($type, fn ($q) => $q->where('type', $type))
             ->latest()
-            ->paginate(20)
+            ->paginate(\App\Support\Listing::perPage($request, 20))
             ->withQueryString();
 
         return view('owner.products.index', compact('products'));

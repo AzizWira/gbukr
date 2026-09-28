@@ -57,38 +57,95 @@
             </div>
         </div>
 
-        <div class="table-wrap">
-            <table class="table">
-                <thead>
-                    <tr>
-                        <th>Customer</th>
-                        <th>Barang</th>
-                        <th>Detail</th>
-                        <th>Qty</th>
-                        <th>Tagihan</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    @forelse($batch->orders as $order)
-                        <tr>
-                            <td>{{ $order->customer->name }}</td>
-                            <td>{{ $order->items->first()?->item_name ?: '-' }}</td>
-                            <td>{{ $order->items->first()?->details ?: ($order->items->first()?->description_type ?: '-') }}</td>
-                            <td>{{ $order->items->sum('qty') }}</td>
-                            <td>
-                                @if($order->invoices->count())
-                                    Rp{{ number_format($order->invoices->sum(fn ($invoice) => $invoice->outstanding()), 0, ',', '.') }}
-                                @else
-                                    -
-                                @endif
-                            </td>
-                        </tr>
-                    @empty
-                        <tr><td colspan="5" class="empty">Belum ada customer di Batch ini.</td></tr>
-                    @endforelse
-                </tbody>
-            </table>
-        </div>
+        @if($batch->orders->count())
+            @php
+                $safeCleanupCount = $batch->orders->filter(fn($order) => empty($deleteBlockers[$order->id]))->count();
+                $protectedCleanupCount = $batch->orders->count() - $safeCleanupCount;
+            @endphp
+            <form method="post" action="{{ route('owner.batches.orders.destroy',$batch) }}" data-confirm-title="Bersihkan order terpilih?" data-confirm="Order tanpa histori pembayaran akan dihapus permanen beserta tagihan yang belum pernah dibayar. Order yang sudah memiliki histori pembayaran hanya akan dikeluarkan dari Batch; order, tagihan, dan pembayaran tetap tersimpan." data-loading-text="Membersihkan order…" data-no-dirty-guard>
+                @csrf
+                @method('delete')
+                <div class="batch-bulk-toolbar">
+                    <div>
+                        <strong>Cleanup isi Batch</strong>
+                        <div class="small muted">Order aman akan dihapus. Order berhistori pembayaran hanya dikeluarkan dari Batch agar audit finansial tetap utuh.</div>
+                    </div>
+                    <button class="btn btn-danger btn-sm" type="submit">Bersihkan order terpilih</button>
+                </div>
+                <div class="table-wrap">
+                    <table class="table responsive-table">
+                        <thead>
+                            <tr>
+                                <th><input type="checkbox" data-check-all="batch-orders" aria-label="Pilih semua order yang aman dihapus"></th>
+                                <th>Customer</th>
+                                <th>Barang</th>
+                                <th>Detail</th>
+                                <th>Qty</th>
+                                <th>Tagihan</th>
+                                <th>Aksi</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach($batch->orders as $order)
+                                @php
+                                    $blocker = $deleteBlockers[$order->id] ?? null;
+                                @endphp
+                                <tr>
+                                    <td data-label="Pilih">
+                                        <input type="checkbox" name="order_ids[]" value="{{ $order->id }}" data-check-group="batch-orders" aria-label="Pilih {{ $order->order_number }}">
+                                    </td>
+                                    <td data-label="Customer">{{ $order->customer->name }}</td>
+                                    <td data-label="Barang">{{ $order->items->first()?->item_name ?: '-' }}</td>
+                                    <td data-label="Detail">{{ $order->items->first()?->details ?: ($order->items->first()?->description_type ?: '-') }}</td>
+                                    <td data-label="Qty">{{ $order->items->sum('qty') }}</td>
+                                    <td data-label="Tagihan">
+                                        @if($order->invoices->count())
+                                            Rp{{ number_format($order->invoices->sum(fn ($invoice) => $invoice->outstanding()), 0, ',', '.') }}
+                                        @else
+                                            -
+                                        @endif
+                                        @if($blocker)
+                                            <div class="small protected-note">Histori dilindungi · akan dikeluarkan dari Batch</div>
+                                        @else
+                                            <div class="small safe-delete-note">Aman dihapus permanen</div>
+                                        @endif
+                                    </td>
+                                    <td data-label="Aksi"><a class="btn btn-soft btn-sm" href="{{ route('owner.orders.show',$order) }}">Buka</a></td>
+                                </tr>
+                            @endforeach
+                        </tbody>
+                    </table>
+                </div>
+            </form>
+
+            <div class="danger-zone" style="margin-top:16px">
+                <div>
+                    <div class="eyebrow">HAPUS BATCH</div>
+                    <h3>Bersihkan lalu hapus Batch</h3>
+                    <p class="muted">
+                        {{ $safeCleanupCount }} order tanpa histori finansial akan dihapus permanen.
+                        @if($protectedCleanupCount > 0)
+                            {{ $protectedCleanupCount }} order yang sudah memiliki histori pembayaran akan dikeluarkan dari Batch, tetapi order, tagihan, dan pembayaran tetap tersimpan.
+                        @endif
+                    </p>
+                </div>
+                <form method="post" action="{{ route('owner.batches.destroy',$batch) }}" data-confirm-title="Bersihkan & hapus Batch?" data-confirm="Batch {{ $batch->code }} akan dihapus. Order tanpa histori pembayaran akan dihapus permanen. Order berhistori pembayaran akan dilepas dari Batch tanpa menghapus tagihan atau pembayaran. Tracking publik Batch juga akan dihapus." data-loading-text="Menghapus Batch…" data-no-dirty-guard>
+                    @csrf
+                    @method('delete')
+                    <button class="btn btn-danger" type="submit">Bersihkan &amp; Hapus Batch</button>
+                </form>
+            </div>
+        @else
+            <div class="empty actionable-empty">
+                <strong>Batch ini belum memiliki order.</strong>
+                <span>Karena belum ada histori customer, Batch ini aman dihapus permanen bila memang tidak diperlukan.</span>
+                <form method="post" action="{{ route('owner.batches.destroy',$batch) }}" data-confirm-title="Hapus Batch kosong?" data-confirm="Batch {{ $batch->code }} dan tracking publik yang terkait akan dihapus permanen. Tindakan ini tidak dapat dibatalkan.">
+                    @csrf
+                    @method('delete')
+                    <button class="btn btn-danger btn-sm" type="submit">Hapus Batch</button>
+                </form>
+            </div>
+        @endif
     </div>
 
     @if($batch->orders->count())

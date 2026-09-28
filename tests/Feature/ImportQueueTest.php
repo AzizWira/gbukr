@@ -136,4 +136,36 @@ class ImportQueueTest extends TestCase
         $response->assertSessionHasErrors('go_group_id');
         $this->assertDatabaseCount('import_runs', 0);
     }
+    public function test_failed_import_can_be_retried_from_same_source(): void
+    {
+        Storage::fake('local');
+        Queue::fake();
+
+        $owner = User::factory()->create([
+            'role' => 'owner',
+            'active' => true,
+            'email_verified_at' => now(),
+        ]);
+        $go = GoGroup::create(['name' => 'Retry GO', 'status' => 'active']);
+        Storage::disk('local')->put('imports/retry.xlsx', 'placeholder');
+        $run = ImportRun::create([
+            'user_id' => $owner->id,
+            'go_group_id' => $go->id,
+            'original_name' => 'retry.xlsx',
+            'stored_path' => 'imports/retry.xlsx',
+            'status' => 'failed',
+            'total_rows' => 100,
+            'processed_rows' => 40,
+            'error_message' => 'Import berhenti sebelum selesai.',
+        ]);
+
+        $response = $this->actingAs($owner)->post(route('owner.import.retry', $run));
+        $response->assertSessionHasNoErrors();
+        $run->refresh();
+        $this->assertSame('queued', $run->status);
+        $this->assertSame(0, $run->processed_rows);
+        $this->assertNull($run->error_message);
+        Queue::assertPushed(ProcessLegacyImport::class, fn ($job) => $job->importRunId === $run->id);
+    }
+
 }

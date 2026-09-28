@@ -38,6 +38,7 @@ Route::middleware('auth')->group(function(){
 Route::middleware(['auth','verified','role:customer'])->group(function(){
     Route::get('/dashboard',Customer\DashboardController::class)->name('customer.dashboard');
     Route::get('/cart',[Customer\CartController::class,'index'])->name('cart.index');
+    Route::get('/cart/summary',[Customer\CartController::class,'summary'])->name('cart.summary');
     Route::post('/cart',[Customer\CartController::class,'store'])->name('cart.store');
     Route::patch('/cart/{variant}',[Customer\CartController::class,'update'])->name('cart.update');
     Route::delete('/cart/{variant}',[Customer\CartController::class,'destroy'])->name('cart.destroy');
@@ -79,6 +80,8 @@ Route::prefix('owner')->name('owner.')->middleware(['auth','verified','role:owne
     Route::get('/orders',[Owner\OrderController::class,'index'])->name('orders.index');
     Route::get('/orders/{order}',[Owner\OrderController::class,'show'])->name('orders.show');
     Route::patch('/orders/{order}/status',[Owner\OrderController::class,'status'])->name('orders.status');
+    Route::delete('/orders/{order}',[Owner\OrderController::class,'destroy'])->name('orders.destroy');
+    Route::delete('/batches/{batch}/orders',[Owner\BatchController::class,'destroyOrders'])->name('batches.orders.destroy');
     Route::post('/orders/{order}/adjustments',[Owner\AdjustmentController::class,'store'])->name('orders.adjustments.store');
     Route::get('/customers',[Owner\CustomerController::class,'index'])->name('customers.index');
     Route::get('/customers/{customer}',[Owner\CustomerController::class,'show'])->name('customers.show');
@@ -125,6 +128,8 @@ Route::prefix('owner')->name('owner.')->middleware(['auth','verified','role:owne
     Route::post('/import/run',[Owner\ImportController::class,'run'])->name('import.run');
     Route::get('/import/runs/{run}',[Owner\ImportController::class,'status'])->name('import.status');
     Route::get('/import/runs/{run}/source',[Owner\ImportController::class,'source'])->name('import.source');
+    Route::post('/import/runs/{run}/retry',[Owner\ImportController::class,'retry'])->name('import.retry');
+    Route::delete('/import/runs/{run}/cleanup',[Owner\ImportController::class,'cleanup'])->name('import.cleanup');
     Route::get('/export',[Owner\ExportController::class,'index'])->name('export.index');
     Route::post('/export/go',[Owner\ExportController::class,'go'])->name('export.go');
     Route::post('/export/full',[Owner\ExportController::class,'full'])->name('export.full');

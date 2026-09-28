@@ -27,7 +27,10 @@
             <a class="{{ request()->routeIs('tracking') ? 'active' : '' }}" href="{{ route('tracking') }}">Tracking</a>
             @auth
                 @if(auth()->user()->isCustomerMode())
-                    <a class="{{ request()->routeIs('cart.*') ? 'active' : '' }}" href="{{ route('cart.index') }}">Keranjang <span class="cart-count">{{ array_sum(session('cart', [])) }}</span></a>
+                    <div class="nav-cart-wrap" data-cart-nav>
+                        <a class="{{ request()->routeIs('cart.*') ? 'active' : '' }}" href="{{ route('cart.index') }}">Keranjang <span class="cart-count">{{ array_sum(session('cart', [])) }}</span></a>
+                        <div class="nav-cart-popover" data-cart-popover data-url="{{ route('cart.summary') }}" hidden></div>
+                    </div>
                 @endif
             @endauth
             @auth
@@ -60,6 +63,9 @@
     <div class="toast toast-processing" data-processing-toast hidden aria-hidden="true">
         <span class="loading-spinner" aria-hidden="true"></span>
         <div><strong data-processing-title>Memproses…</strong><div class="small muted">Jangan kirim form yang sama berulang kali.</div></div>
+    </div>
+    <div class="toast toast-info unsaved-toast" data-unsaved-toast hidden aria-hidden="true">
+        <div><strong>Perubahan belum disimpan</strong><div class="small">Simpan form atau batalkan perubahan sebelum berpindah halaman.</div></div>
     </div>
     @if(session('success'))
         <div class="toast toast-success" data-toast data-timeout="4500">

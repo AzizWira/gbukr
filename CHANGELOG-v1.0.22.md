@@ -1,0 +1,22 @@
+# v1.0.22
+
+- Menambahkan safe cleanup Order berdasarkan histori finansial, termasuk bulk cleanup dari Detail Batch.
+- Order tanpa histori pembayaran dapat dihapus permanen; Order yang sudah memiliki histori pembayaran dapat dikeluarkan dari Batch tanpa menghapus Order, Tagihan, Payment, atau bukti pembayaran.
+- Batch dapat dibersihkan lalu dihapus: order aman dihapus, order finansial dilepas dari Batch, dan tracking Batch ikut dibersihkan.
+- Ready Stock yang aman dihapus mengembalikan stok variasi otomatis.
+- Menambahkan provenance Import Run pada Order dan Invoice untuk cleanup hasil import yang lebih aman.
+- Menambahkan repair migration untuk instalasi yang belum memiliki kolom `import_run_id`; importer dan cleanup tetap mempunyai fallback agar tidak menghasilkan 500 ketika kolom belum tersedia.
+- Import XLSX/XLS besar diproses per chunk/sheet agar tidak memuat seluruh workbook ke RAM sekaligus dan lebih aman pada `memory_limit` 128 MB.
+- Preview workbook menggunakan metadata sheet sehingga tidak perlu membuka semua cell ke memori.
+- Riwayat Import menampilkan status dan pesan yang manusiawi, tidak lagi mengekspos SQLSTATE/query/stack trace.
+- Import yang berhenti di tengah dideteksi sebagai gagal setelah tidak ada progress; file asli tetap tersimpan dan tersedia aksi **Coba lagi** yang idempoten.
+- Cleanup hasil import menghapus order yang aman dan melepaskan order berhistori pembayaran dari Batch; histori finansial tetap dipertahankan.
+- Menambahkan pagination konsisten dengan informasi rentang data, jump page, dan pilihan 20/50/100 data per halaman.
+- Menambahkan status filter pada Batch dan Tagihan Owner.
+- Dashboard Owner dibuat lebih actionable: pembayaran pending, overdue, Batch tanpa tracking, Arrived Indo, PO tutup hari ini, dan Unclaimed.
+- Detail Order memiliki timeline status dan danger zone yang menjelaskan apakah order dapat dihapus permanen atau hanya dikeluarkan dari Batch.
+- Customer Tagihan dibuat menjadi ledger per Order/Batch.
+- Keranjang mendapatkan mini-cart desktop; add-to-cart tetap tidak memaksa user pindah halaman.
+- Form yang berubah menampilkan indikator “Perubahan belum disimpan”.
+- Tabel cleanup Batch dibuat lebih mudah dipakai di mobile.
+- README diperbarui sebagai dokumentasi sistem, tanpa daftar patch/version history.

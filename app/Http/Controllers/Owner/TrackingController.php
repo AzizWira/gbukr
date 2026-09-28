@@ -31,7 +31,7 @@ class TrackingController extends Controller
                 });
             })
             ->latest()
-            ->paginate(25)
+            ->paginate(\App\Support\Listing::perPage($request, 20))
             ->withQueryString();
 
         $countries = Country::where('active', true)->orderBy('name')->get();

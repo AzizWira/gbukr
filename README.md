@@ -74,7 +74,7 @@ Customer wajib memilih rekening tujuan yang benar sebelum mengirim bukti transfe
 ## Search, filter, dan pagination
 Daftar utama seperti Batch, Tracking, Order, Tagihan, Pembayaran, Customer, Produk, serta daftar milik Customer mendukung pencarian. Untuk identifier seperti kode Batch/Order/Invoice/Payment, pencarian toleran terhadap perbedaan huruf besar-kecil dan tanda pemisah. Filter memiliki tombol Clear.
 
-Jika hasil mempunyai lebih dari satu halaman, pagination menyediakan Previous/Next dan input nomor halaman sehingga user dapat langsung menuju halaman tertentu tanpa maju satu per satu.
+Jika hasil mempunyai lebih dari satu halaman, pagination menyediakan Previous/Next, input nomor halaman, informasi rentang data, serta pilihan 20/50/100 data per halaman sehingga user dapat langsung menuju halaman tertentu tanpa maju satu per satu.
 
 ## Siklus hidup data
 Sistem memakai **conditional delete** untuk mencegah histori rusak. Data yang belum pernah dipakai dapat dihapus permanen dengan dialog konfirmasi yang menjelaskan dampaknya. Jika record sudah dipakai, hard delete diblokir dan Owner diarahkan memakai Nonaktifkan/Arsip/Batal sesuai jenis datanya.
@@ -87,10 +87,12 @@ Sistem memakai **conditional delete** untuk mencegah histori rusak. Data yang be
 - Status custom: dapat dihapus jika belum digunakan; status inti tidak dapat dihapus.
 - Produk/variasi: dapat dihapus jika belum pernah dipakai item order; jika sudah dipakai gunakan Nonaktifkan.
 - Customer: dapat dihapus jika belum mempunyai order, tagihan, pembayaran, dan tidak memiliki akses Admin; customer berhistori hanya dapat dinonaktifkan.
-- Batch: dapat diedit dan Batch kosong dapat dihapus; Batch yang sudah mempunyai order dipertahankan.
+- Batch: dapat diedit dan dibersihkan. Order tanpa histori pembayaran dapat dihapus permanen. Order yang sudah memiliki histori pembayaran dapat dikeluarkan dari Batch tanpa menghapus order/tagihan/payment; setelah relasi operasional bersih, Batch dapat dihapus permanen.
 - Tracking manual: dapat diedit/dihapus; Tracking yang berasal dari Batch dikelola melalui Batch agar sinkron.
 - Tagihan: dapat diedit atau dibatalkan sebelum mempunyai proses pembayaran. Pembatalan menyimpan histori.
-- Order, Payment, dan Import Run yang sudah menjadi histori tidak dihapus sembarangan.
+- Order: hard delete hanya tersedia bila belum memiliki histori pembayaran. Untuk Ready Stock yang aman dihapus, stok variasi dikembalikan otomatis. Order non-Batch yang sudah bergerak dari status Ordered tetap dilindungi sebagai histori operasional.
+- Payment tidak dihapus sembarangan karena merupakan histori finansial.
+- Import Run yang selesai/gagal dapat menjalankan Cleanup hasil import. Order tanpa histori finansial dihapus, sedangkan order berhistori pembayaran hanya dilepas dari Batch. File workbook asli tetap disimpan.
 - Customer legacy dapat digabungkan ke akun Customer yang benar melalui fitur merge.
 
 ## Tracking dan status
@@ -99,10 +101,12 @@ Tracking publik tidak menampilkan identitas pribadi customer. Owner dapat mengat
 ## Migrasi spreadsheet lama
 - Upload workbook XLSX/XLS maksimal 5 MB.
 - Satu workbook wajib dipetakan ke tepat satu GO: pilih GO yang sudah ada atau buat GO baru. Import tidak dapat dijalankan sebelum pilihan tersebut valid.
-- Import berjalan melalui queue agar workbook besar tidak timeout di request browser.
+- Flow import dibuat bertahap: Upload → Preview/Review → Pilih/Buat GO → Import → Hasil.
+- Import berjalan melalui queue agar workbook besar tidak timeout di request browser. Pembacaan XLSX/XLS dilakukan per chunk/sheet supaya tidak memuat seluruh workbook ke RAM sekaligus dan tetap aman pada memory limit yang ketat.
 - Baris tanpa Batch tetap dapat diimport menggunakan fallback Batch otomatis.
 - File workbook asli dipertahankan sebagai arsip karena XLSX sendiri sudah terkompresi dan perlu dapat diunduh kembali.
 - Sheet yang belum mempunyai aturan bisnis jelas tidak dipaksakan masuk database.
+- Hasil import dapat di-cleanup dari Riwayat Import. Histori finansial tidak dihapus: order yang sudah dibayar dilepas dari Batch dan tetap tersedia sebagai audit. Import gagal dapat dicoba ulang dari file yang sama tanpa menggandakan row legacy yang sudah sempat masuk.
 
 ## Kebijakan file
 - Gambar produk: upload maksimal 5 MB, resize maksimal sekitar 1800 px dan disimpan sebagai WebP jika GD/WebP tersedia.
@@ -116,6 +120,14 @@ Email verifikasi dan reset password dikirim langsung agar tidak bergantung pada 
 
 ## Export dan backup
 Owner dapat export data per GO atau backup lengkap ke XLSX dengan beberapa sheet agar struktur rekap tetap mudah dibaca. Backup mempertahankan informasi transaksi, rekening, status, dan metadata penting lain yang digunakan sistem.
+
+## UX operasional
+- Dashboard Owner memprioritaskan pekerjaan yang perlu ditangani: pembayaran pending, tagihan overdue, Batch tanpa tracking, Batch Arrived Indo, PO yang tutup hari ini, dan Unclaimed.
+- Form yang berubah menampilkan indikator “Perubahan belum disimpan” dan memberi konfirmasi sebelum user meninggalkan halaman.
+- Dangerous action selalu memakai dialog konfirmasi yang menjelaskan dampak data.
+- Detail Order menampilkan timeline perubahan status.
+- Keranjang memiliki badge, halaman ringkasan visual, serta mini-cart desktop; menambah barang tidak memaksa user keluar dari detail produk.
+- Tabel isi Batch berubah menjadi card-like layout di layar kecil agar aksi cleanup tetap terbaca.
 
 ## Setup lokal
 

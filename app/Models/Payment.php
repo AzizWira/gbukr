@@ -7,7 +7,7 @@ class Payment extends Model
     protected function casts():array{return ['submitted_at'=>'datetime','verified_at'=>'datetime'];}
     public function customer(){return $this->belongsTo(User::class,'customer_id');}
     public function bankAccount(){return $this->belongsTo(BankAccount::class);}
-    public function invoices(){return $this->belongsToMany(Invoice::class)->withPivot('allocated_amount')->withTimestamps();}
+    public function invoices(){return $this->belongsToMany(Invoice::class, 'invoice_payment')->withPivot('allocated_amount')->withTimestamps();}
     public function proofs(){return $this->hasMany(PaymentProof::class);}
     public function verifier(){return $this->belongsTo(User::class,'verified_by');}
 }

@@ -11,6 +11,7 @@ class Order extends Model
         'go_group_id',
         'preorder_id',
         'batch_id',
+        'import_run_id',
         'source_type',
         'order_number',
         'status',
@@ -50,6 +51,18 @@ class Order extends Model
         return $this->belongsTo(Batch::class);
     }
 
+    public function importRun()
+    {
+        return $this->belongsTo(ImportRun::class);
+    }
+
+    public function statusHistories()
+    {
+        return $this->hasMany(StatusHistory::class, 'entity_id')
+            ->where('entity_type', 'order')
+            ->orderByDesc('changed_at');
+    }
+
     public function items()
     {
         return $this->hasMany(OrderItem::class);
@@ -63,5 +76,29 @@ class Order extends Model
     public function adjustments()
     {
         return $this->hasMany(OrderAdjustment::class);
+    }
+
+    public function hasFinancialHistory(): bool
+    {
+        return $this->invoices()
+            ->where(function ($query) {
+                $query->where('paid_amount', '>', 0)
+                    ->orWhereHas('payments');
+            })
+            ->exists();
+    }
+
+    public function canBeDeletedPermanently(): bool
+    {
+        return !$this->hasFinancialHistory();
+    }
+
+    public function deleteBlockReason(): ?string
+    {
+        if ($this->hasFinancialHistory()) {
+            return 'Order sudah memiliki riwayat pembayaran. Histori finansial harus dipertahankan.';
+        }
+
+        return null;
     }
 }

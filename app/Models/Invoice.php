@@ -9,6 +9,7 @@ class Invoice extends Model
     protected $fillable = [
         'customer_id',
         'order_id',
+        'import_run_id',
         'invoice_number',
         'type',
         'amount',
@@ -41,9 +42,14 @@ class Invoice extends Model
         return $this->belongsTo(Order::class);
     }
 
+    public function importRun()
+    {
+        return $this->belongsTo(ImportRun::class);
+    }
+
     public function payments()
     {
-        return $this->belongsToMany(Payment::class)
+        return $this->belongsToMany(Payment::class, 'invoice_payment')
             ->withPivot('allocated_amount')
             ->withTimestamps();
     }

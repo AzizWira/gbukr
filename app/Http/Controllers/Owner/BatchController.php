@@ -5,7 +5,7 @@ namespace App\Http\Controllers\Owner;
 use App\Http\Controllers\Controller;
 use App\Models\{Batch, Country, GoGroup, Invoice, Order, OrderItem, Shipment, User, Warehouse};
 use App\Notifications\InvoiceCreatedNotification;
-use App\Services\{BatchTrackingService, OrderStatusService};
+use App\Services\{BatchTrackingService, OrderCleanupService, OrderStatusService};
 use App\Support\Search;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -18,8 +18,12 @@ class BatchController extends Controller
     public function index(Request $request)
     {
         $query = Search::term($request->query('q'));
+        $status = $request->query('status');
+        if ($status && !in_array($status, OrderStatusService::statuses(), true)) {
+            $status = null;
+        }
 
-        $batches = Batch::with(['country', 'goGroup', 'warehouse'])
+        $batches = Batch::with(['country', 'goGroup', 'warehouse'])->withCount('orders')
             ->when($query !== '', function ($builder) use ($query) {
                 $builder->where(function ($sub) use ($query) {
                     Search::code($sub, 'code', $query)
@@ -30,8 +34,9 @@ class BatchController extends Controller
                         ->orWhereHas('warehouse', fn ($warehouse) => $warehouse->where('code', 'like', '%' . $query . '%')->orWhere('name', 'like', '%' . $query . '%'));
                 });
             })
+            ->when($status, fn ($builder) => $builder->where('status', $status))
             ->latest()
-            ->paginate(20)
+            ->paginate(\App\Support\Listing::perPage($request, 20))
             ->withQueryString();
 
         return view('owner.batches.index', compact('batches'));
@@ -114,21 +119,35 @@ class BatchController extends Controller
         return redirect()->route('owner.batches.show', $batch)->with('success', 'Data Batch berhasil diperbarui.');
     }
 
-    public function destroy(Batch $batch)
+    public function destroy(Batch $batch, OrderCleanupService $cleanup)
     {
-        if ($batch->orders()->exists()) {
-            throw ValidationException::withMessages(['batch' => 'Batch yang sudah memiliki order tidak dapat dihapus. Ubah datanya atau statusnya agar histori tetap aman.']);
-        }
+        $orders = $batch->orders()->with(['invoices.payments', 'batch'])->get();
+        $deleted = 0;
+        $detached = 0;
 
-        DB::transaction(function () use ($batch) {
+        DB::transaction(function () use ($batch, $orders, $cleanup, &$deleted, &$detached) {
+            foreach ($orders as $order) {
+                $result = $cleanup->cleanupFromBatch($order);
+                $result === 'deleted' ? $deleted++ : $detached++;
+            }
+
             Shipment::where('source_type', 'batch')->where('source_id', $batch->id)->delete();
             $batch->delete();
         });
 
-        return redirect()->route('owner.batches.index')->with('success', 'Batch kosong berhasil dihapus.');
+        $message = 'Batch berhasil dihapus.';
+        if ($deleted > 0 || $detached > 0) {
+            $message .= ' ' . $deleted . ' order tanpa histori finansial dihapus permanen';
+            if ($detached > 0) {
+                $message .= ' dan ' . $detached . ' order berhistori pembayaran dikeluarkan dari Batch tanpa menghapus tagihan/pembayaran';
+            }
+            $message .= '.';
+        }
+
+        return redirect()->route('owner.batches.index')->with('success', $message);
     }
 
-    public function show(Batch $batch, BatchTrackingService $tracking)
+    public function show(Batch $batch, BatchTrackingService $tracking, OrderCleanupService $cleanup)
     {
         if (!\App\Models\Shipment::where('source_type', 'batch')->where('source_id', $batch->id)->exists()) {
             $tracking->sync($batch->loadMissing(['country', 'orders.items']));
@@ -141,7 +160,7 @@ class BatchController extends Controller
             'shipment',
             'orders.customer.customerProfile',
             'orders.items',
-            'orders.invoices',
+            'orders.invoices.payments',
             'orders.adjustments.invoice.customer',
         ]);
 
@@ -150,7 +169,9 @@ class BatchController extends Controller
             ->orderBy('name')
             ->get();
 
-        return view('owner.batches.show', compact('batch', 'customers'));
+        $deleteBlockers = $batch->orders->mapWithKeys(fn ($order) => [$order->id => $cleanup->blocker($order)]);
+
+        return view('owner.batches.show', compact('batch', 'customers', 'deleteBlockers'));
     }
 
     public function addOrder(Request $request, Batch $batch, BatchTrackingService $tracking)
@@ -264,6 +285,37 @@ class BatchController extends Controller
         }
 
         return back()->with('success', 'Order customer berhasil ditambahkan ke Batch.');
+    }
+
+    public function destroyOrders(Request $request, Batch $batch, OrderCleanupService $cleanup, BatchTrackingService $tracking)
+    {
+        $data = $request->validate([
+            'order_ids' => ['required', 'array', 'min:1', 'max:200'],
+            'order_ids.*' => ['integer'],
+        ], [
+            'order_ids.required' => 'Pilih minimal satu order yang akan dihapus.',
+        ]);
+
+        $orders = $batch->orders()->with('invoices.payments')->whereIn('id', $data['order_ids'])->get();
+        if ($orders->count() !== count(array_unique($data['order_ids']))) {
+            throw ValidationException::withMessages(['order_ids' => 'Ada order yang tidak berasal dari Batch ini.']);
+        }
+
+        $deleted = 0;
+        $detached = 0;
+        foreach ($orders as $order) {
+            $result = $cleanup->cleanupFromBatch($order);
+            $result === 'deleted' ? $deleted++ : $detached++;
+        }
+
+        $tracking->sync($batch->fresh(['country', 'orders.items']));
+
+        $message = $deleted . ' order tanpa histori finansial dihapus permanen.';
+        if ($detached > 0) {
+            $message .= ' ' . $detached . ' order dengan histori pembayaran dikeluarkan dari Batch; order, tagihan, dan pembayaran tetap tersimpan.';
+        }
+
+        return back()->with('success', $message);
     }
 
     public function updateStatus(

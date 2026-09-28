@@ -16,6 +16,11 @@ class InvoiceController extends Controller
     public function index(Request $request)
     {
         $query = Search::term($request->query('q'));
+        $status = $request->query('status');
+        $allowedStatuses = ['unpaid','partial','pending','paid','overdue','cancelled'];
+        if ($status && !in_array($status, $allowedStatuses, true)) {
+            $status = null;
+        }
 
         $invoices = Invoice::with(['customer', 'order.items', 'order.batch', 'payments'])
             ->when($query !== '', fn ($builder) => $builder->where(function ($sub) use ($query) {
@@ -28,8 +33,9 @@ class InvoiceController extends Controller
                         ->orWhereHas('items', fn ($item) => $item->where('item_name', 'like', '%' . $query . '%'))
                         ->orWhereHas('batch', fn ($batch) => Search::code($batch, 'code', $query)));
             }))
+            ->when($status, fn ($builder) => $builder->where('status', $status))
             ->latest()
-            ->paginate(25)
+            ->paginate(\App\Support\Listing::perPage($request, 20))
             ->withQueryString();
 
         $customers = User::where('role', 'customer')->where('active', true)->orderBy('name')->get();

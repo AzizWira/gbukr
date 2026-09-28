@@ -33,7 +33,7 @@ class PaymentController extends Controller
             }))
             ->when(!empty($data['status']), fn ($q) => $q->where('status', $data['status']))
             ->latest()
-            ->paginate(25)
+            ->paginate(\App\Support\Listing::perPage($request, 20))
             ->withQueryString();
 
         return view('owner.payments.index', compact('payments'));

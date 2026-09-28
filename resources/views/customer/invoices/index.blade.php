@@ -3,16 +3,17 @@
 
 @section('dashboard')
 @php
-    $regularInvoices = $invoices->getCollection()->where('type', '!=', 'kekurangan');
-    $adjustmentInvoices = $invoices->getCollection()->where('type', 'kekurangan');
     $payableStatuses = ['unpaid', 'partial', 'overdue'];
+    $invoiceGroups = $invoices->getCollection()->groupBy(function ($invoice) {
+        return $invoice->order_id ? 'order-' . $invoice->order_id : 'manual-' . $invoice->id;
+    });
 @endphp
 
 <div class="page-head">
     <div>
         <div class="eyebrow">TAGIHAN SAYA</div>
         <h1>Tagihan &amp; pelunasan</h1>
-        <p class="muted">Tagihan utama dan tagihan tambahan dipisahkan supaya perubahan harga tetap mudah dilacak.</p>
+        <p class="muted">Tagihan dikelompokkan per Order supaya tagihan awal, Tax, Rate, shipping, atau kekurangan lain tetap mudah ditelusuri.</p>
     </div>
 </div>
 
@@ -22,81 +23,68 @@
 </form>
 
 <form method="get" action="{{ route('customer.payments.create') }}" data-no-dirty-guard>
-    <div class="grid grid-2">
-        <div class="card">
-            <div class="section-head">
-                <div>
-                    <h3>Tagihan utama</h3>
-                    <p>DP, cicilan, full payment, dan pelunasan.</p>
-                </div>
-            </div>
-
-            @forelse($regularInvoices as $invoice)
-                <div class="summary-row invoice-row">
-                    <label class="invoice-check">
-                        <input type="checkbox" name="invoice_ids[]" value="{{ $invoice->id }}" @disabled(!in_array($invoice->status, $payableStatuses, true))>
-                        <span>
-                            <strong>{{ $invoice->invoice_number }}</strong>
-                            <span class="small muted" style="display:block">
-                                {{ strtoupper($invoice->type) }} · {{ $invoice->order?->items?->first()?->item_name ?? 'Tagihan' }}
-                                @if($invoice->deadline_at)
-                                    · batas {{ $invoice->deadline_at->translatedFormat('d F Y') }}
-                                @endif
-                            </span>
-                        </span>
-                    </label>
-                    <div style="text-align:right">
-                        <div class="money">Rp{{ number_format($invoice->outstanding(), 0, ',', '.') }}</div>
-                        @if($invoice->penalty_amount)
-                            <div class="small" style="color:var(--danger)">termasuk denda Rp{{ number_format($invoice->penalty_amount, 0, ',', '.') }}</div>
-                        @endif
-                        <span class="badge {{ $invoice->status === 'paid' ? 'ok' : ($invoice->status === 'pending' ? 'warn' : '') }}">{{ ucfirst($invoice->status) }}</span>
+    <div class="invoice-ledger-list">
+        @forelse($invoiceGroups as $group)
+            @php
+                $first = $group->first();
+                $order = $first->order;
+                $item = $order?->items?->first();
+            @endphp
+            <section class="card invoice-ledger-card">
+                <div class="invoice-ledger-head">
+                    <div>
+                        <div class="eyebrow">{{ $order?->order_number ?: 'TAGIHAN MANUAL' }}</div>
+                        <h3>{{ $item?->item_name ?: 'Tagihan' }}</h3>
+                        <div class="small muted">
+                            @if($order?->batch)
+                                Batch {{ $order->batch->code }}
+                            @elseif($order?->goGroup)
+                                {{ $order->goGroup->name }}
+                            @else
+                                {{ $first->created_at->translatedFormat('d F Y') }}
+                            @endif
+                        </div>
+                    </div>
+                    <div class="ledger-total">
+                        <span class="small muted">Sisa grup</span>
+                        <strong>Rp{{ number_format($group->sum(fn($invoice) => $invoice->outstanding()),0,',','.') }}</strong>
                     </div>
                 </div>
-            @empty
-                <div class="empty">Belum ada tagihan utama.</div>
-            @endforelse
-        </div>
 
-        <div class="card card-pink">
-            <div class="section-head">
-                <div>
-                    <h3>Tagihan Tambahan</h3>
-                    <p>Tax, shipping aktual, perubahan berat/rate, dan kekurangan lain tanpa mengubah tagihan awal.</p>
-                </div>
-            </div>
-
-            @forelse($adjustmentInvoices as $invoice)
-                <div class="summary-row invoice-row">
-                    <label class="invoice-check">
-                        <input type="checkbox" name="invoice_ids[]" value="{{ $invoice->id }}" @disabled(!in_array($invoice->status, $payableStatuses, true))>
-                        <span>
-                            <strong>{{ $invoice->order?->items?->first()?->item_name ?? $invoice->invoice_number }}</strong>
-                            <span class="small muted" style="display:block">
-                                {{ $invoice->adjustment?->reasonLabel() ?? 'Penyesuaian harga' }}
-                                @if($invoice->deadline_at)
-                                    · batas {{ $invoice->deadline_at->translatedFormat('d F Y') }}
+                <div class="ledger-rows">
+                    @foreach($group as $invoice)
+                        <div class="ledger-row">
+                            <label class="invoice-check">
+                                <input type="checkbox" name="invoice_ids[]" value="{{ $invoice->id }}" @disabled(!in_array($invoice->status, $payableStatuses, true))>
+                                <span>
+                                    <strong>{{ $invoice->type === 'kekurangan' ? ($invoice->adjustment?->reasonLabel() ?? 'Tagihan Tambahan') : strtoupper($invoice->type) }}</strong>
+                                    <span class="small muted" style="display:block">{{ $invoice->invoice_number }}@if($invoice->deadline_at) · batas {{ $invoice->deadline_at->translatedFormat('d F Y') }}@endif</span>
+                                </span>
+                            </label>
+                            <div class="ledger-row-value">
+                                <div class="money">Rp{{ number_format($invoice->outstanding(),0,',','.') }}</div>
+                                @if($invoice->penalty_amount)
+                                    <div class="small" style="color:var(--danger)">termasuk denda Rp{{ number_format($invoice->penalty_amount,0,',','.') }}</div>
                                 @endif
-                            </span>
-                        </span>
-                    </label>
-                    <div style="text-align:right">
-                        <div class="money">Rp{{ number_format($invoice->outstanding(), 0, ',', '.') }}</div>
-                        <a class="small" style="color:var(--blue);font-weight:800" href="{{ route('customer.invoices.show', $invoice) }}">Lihat rincian</a>
-                    </div>
+                                <span class="badge {{ $invoice->status === 'paid' ? 'ok' : ($invoice->status === 'pending' ? 'warn' : '') }}">{{ ucfirst($invoice->status) }}</span>
+                                <a class="small" href="{{ route('customer.invoices.show',$invoice) }}">Rincian</a>
+                            </div>
+                        </div>
+                    @endforeach
                 </div>
-            @empty
-                <div class="empty">Belum ada tagihan tambahan.</div>
-            @endforelse
-        </div>
+            </section>
+        @empty
+            <div class="empty actionable-empty"><strong>Belum ada tagihan.</strong><span>Tagihan dari checkout, Batch, atau Tagihan Tambahan akan muncul di sini.</span></div>
+        @endforelse
     </div>
 
-    @if($invoices->count())
-        <div class="actions" style="justify-content:flex-end;margin-top:18px">
+    @if($invoices->getCollection()->contains(fn($invoice) => in_array($invoice->status,$payableStatuses,true)))
+        <div class="sticky-payment-action">
+            <div><strong>Pilih tagihan yang ingin dibayar</strong><div class="small muted">Beberapa tagihan dapat dibayar dalam satu transfer selama rekening tujuan yang dipilih sama.</div></div>
             <button class="btn btn-primary">Bayar tagihan terpilih</button>
         </div>
     @endif
 </form>
 
-<div class="pagination">{{ $invoices->links() }}</div>
+@include('partials.pagination',['paginator'=>$invoices])
 @endsection

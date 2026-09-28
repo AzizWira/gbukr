@@ -31,7 +31,7 @@ class CatalogController extends Controller
                         ->orWhere('source_label', 'like', '%' . $query . '%'));
             }))
             ->latest()
-            ->paginate(12)
+            ->paginate(\App\Support\Listing::perPage($request, 20))
             ->withQueryString();
 
         return view('catalog.index', compact('products'));

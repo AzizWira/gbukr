@@ -29,7 +29,7 @@ class CustomerController extends Controller
                         ->orWhere('line_id', 'like', '%' . $query . '%'));
             }))
             ->latest()
-            ->paginate(25)
+            ->paginate(\App\Support\Listing::perPage($request, 20))
             ->withQueryString();
 
         return view('owner.customers.index', compact('customers'));

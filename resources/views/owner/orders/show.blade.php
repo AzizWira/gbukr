@@ -67,6 +67,25 @@
         <button class="btn btn-primary" style="margin-top:14px">Simpan status</button>
     </form>
 
+    <div class="card" style="grid-column:1/-1">
+        <div class="section-head">
+            <div><h3>Timeline status</h3><p>Riwayat perubahan status membantu melihat siapa mengubah apa dan kapan.</p></div>
+        </div>
+        <div class="status-timeline">
+            @forelse($order->statusHistories as $history)
+                <div class="timeline-item">
+                    <span class="timeline-dot" style="--status-color:{{ \App\Services\OrderStatusService::color($history->to_status) }}"></span>
+                    <div>
+                        <strong>{{ \App\Services\OrderStatusService::label($history->to_status) }}</strong>
+                        <div class="small muted">{{ $history->changed_at?->translatedFormat('d F Y, H.i') ?: '-' }} · {{ $history->changer?->name ?: 'Sistem' }}@if($history->notes) · {{ $history->notes }}@endif</div>
+                    </div>
+                </div>
+            @empty
+                <div class="empty">Belum ada histori perubahan status.</div>
+            @endforelse
+        </div>
+    </div>
+
     <div class="card card-pink" style="grid-column:1/-1">
         <div class="section-head">
             <div><div class="eyebrow">TAGIHAN TAMBAHAN</div><h3>Riwayat tagihan tambahan</h3><p>Satu order dapat memiliki lebih dari satu tambahan, misalnya Tax lalu perubahan Rate. Setiap tambahan disimpan terpisah.</p></div>
@@ -99,6 +118,35 @@
                 <button class="btn btn-primary" style="margin-top:14px">Buat tagihan tambahan</button>
             </form>
         </details>
+    </div>
+
+    <div class="card danger-zone" style="grid-column:1/-1">
+        <div>
+            <div class="eyebrow">DATA LIFECYCLE</div>
+            @if($deleteBlocker && $order->batch_id)
+                <h3>Keluarkan order dari Batch</h3>
+                <p class="muted">{{ $deleteBlocker }} Order tidak akan dihapus, tetapi dapat dilepas dari Batch agar Batch bisa dibersihkan. Tagihan dan pembayaran tetap utuh.</p>
+            @elseif($deleteBlocker)
+                <h3>Order dilindungi histori</h3>
+                <p class="muted">{{ $deleteBlocker }} Karena order sudah tidak berada di Batch, histori ini dipertahankan sebagai audit trail.</p>
+            @else
+                <h3>Hapus order permanen</h3>
+                <p class="muted">Order ini belum memiliki histori pembayaran. Jika dihapus, item, tagihan yang belum dibayar, dan tagihan tambahan terkait ikut dibersihkan permanen.</p>
+            @endif
+        </div>
+        @if(!$deleteBlocker)
+            <form method="post" action="{{ route('owner.orders.destroy',$order) }}" data-confirm-title="Hapus order permanen?" data-confirm="Order {{ $order->order_number }}, item, tagihan yang belum pernah dibayar, serta tagihan tambahan terkait akan dihapus permanen. Tindakan ini tidak dapat dibatalkan.">
+                @csrf
+                @method('delete')
+                <button class="btn btn-danger" type="submit">Hapus order</button>
+            </form>
+        @elseif($order->batch_id)
+            <form method="post" action="{{ route('owner.orders.destroy',$order) }}" data-confirm-title="Keluarkan dari Batch?" data-confirm="Order {{ $order->order_number }} akan dilepas dari Batch. Order, tagihan, histori pembayaran, dan bukti pembayaran tidak dihapus. Tindakan ini digunakan untuk membersihkan relasi Batch tanpa merusak audit finansial.">
+                @csrf
+                @method('delete')
+                <button class="btn btn-danger" type="submit">Keluarkan dari Batch</button>
+            </form>
+        @endif
     </div>
 </div>
 @endsection

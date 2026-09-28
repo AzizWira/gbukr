@@ -14,6 +14,37 @@ class CartController extends Controller
         return view('customer.cart', compact('cart'));
     }
 
+
+    public function summary(Request $request)
+    {
+        $cart = $this->hydrate($request->session()->get('cart', []));
+        $items = $cart->take(4)->map(function ($row) {
+            $variant = $row['variant'];
+            $product = $variant->product;
+            $unit = $variant->price_idr !== null
+                ? (int) $variant->price_idr
+                : (int) round(((float) $variant->price_foreign * (float) $product->country->rate) + (int) $product->item_fee_idr);
+            return [
+                'name' => $product->name,
+                'variant' => $variant->name,
+                'qty' => (int) $row['qty'],
+                'subtotal' => $unit * (int) $row['qty'],
+            ];
+        })->values();
+
+        return response()->json([
+            'count' => (int) $cart->sum('qty'),
+            'total' => (int) $cart->sum(function ($row) {
+                $variant = $row['variant'];
+                $product = $variant->product;
+                $unit = $variant->price_idr !== null
+                    ? (int) $variant->price_idr
+                    : (int) round(((float) $variant->price_foreign * (float) $product->country->rate) + (int) $product->item_fee_idr);
+                return $unit * (int) $row['qty'];
+            }),
+            'items' => $items,
+        ]);
+    }
     public function store(Request $request)
     {
         $data = $request->validate([

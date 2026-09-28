@@ -3,7 +3,9 @@
 namespace App\Services;
 
 use App\Models\{Batch, Country, CustomerProfile, GoGroup, Invoice, Order, OrderAdjustment, OrderItem, Shipment, User};
+use App\Services\Spreadsheet\ChunkReadFilter;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
 use PhpOffice\PhpSpreadsheet\IOFactory;
@@ -12,6 +14,9 @@ use PhpOffice\PhpSpreadsheet\Worksheet\Worksheet;
 
 class LegacyImportService
 {
+    private const CHUNK_ROWS = 250;
+    private const HEADER_ROWS = 20;
+
     private const BILLING_SHEETS = [
         'TAGIHAN KR' => ['country' => 'KR', 'source' => 'mixed'],
         'TAGIHAN CH' => ['country' => 'CH', 'source' => 'mixed'],
@@ -31,6 +36,8 @@ class LegacyImportService
     private array $countryCache = [];
     private array $batchCache = [];
     private array $touchedBatchIds = [];
+    private ?int $currentImportRunId = null;
+    private array $importRunColumnSupport = [];
 
     public function __construct(private readonly BatchTrackingService $batchTracking)
     {
@@ -38,27 +45,27 @@ class LegacyImportService
 
     public function preview(string $path): array
     {
-        $book = $this->loadWorkbook($path);
         $sheets = [];
         $recognizedCount = 0;
         $estimatedRows = 0;
 
-        foreach ($book->getWorksheetIterator() as $sheet) {
-            $title = trim($sheet->getTitle());
+        foreach ($this->worksheetInfo($path) as $info) {
+            $title = trim((string) ($info['worksheetName'] ?? ''));
             $normalized = $this->normalizeSheetTitle($title);
             $isStatus = $normalized === 'STATUS BARANG';
             $billing = self::BILLING_SHEETS[$normalized] ?? null;
             $recognized = $isStatus || $billing !== null;
+            $rows = max(0, (int) ($info['totalRows'] ?? 0));
 
             if ($recognized) {
                 $recognizedCount++;
-                $estimatedRows += max(0, $sheet->getHighestDataRow() - 2);
+                $estimatedRows += max(0, $rows - 2);
             }
 
             $sheets[] = [
                 'sheet' => $title,
-                'rows' => $sheet->getHighestDataRow(),
-                'columns' => $sheet->getHighestDataColumn(),
+                'rows' => $rows,
+                'columns' => (string) ($info['lastColumnLetter'] ?? ($info['totalColumns'] ?? '-')),
                 'recognized' => $recognized,
                 'mode' => $isStatus ? 'Tracking / status' : ($billing ? 'Tagihan' : 'Tidak diimport'),
             ];
@@ -76,14 +83,16 @@ class LegacyImportService
         string $path,
         int $goGroupId,
         string $sourceName,
-        ?callable $progress = null
+        ?callable $progress = null,
+        ?int $importRunId = null
     ): array {
         $group = GoGroup::findOrFail($goGroupId);
-        $book = $this->loadWorkbook($path, true);
         $this->customerCache = [];
         $this->countryCache = [];
         $this->batchCache = [];
         $this->touchedBatchIds = [];
+        $this->currentImportRunId = $importRunId;
+        $this->importRunColumnSupport = [];
 
         $summary = [
             'customers' => 0,
@@ -94,14 +103,16 @@ class LegacyImportService
             'skipped' => 0,
         ];
 
-        $totalRows = 0;
-        foreach ($book->getWorksheetIterator() as $sheet) {
-            $normalized = $this->normalizeSheetTitle($sheet->getTitle());
-            if ($normalized === 'STATUS BARANG' || isset(self::BILLING_SHEETS[$normalized])) {
-                $totalRows += max(0, $sheet->getHighestDataRow() - 2);
-            }
-        }
+        $worksheetInfo = $this->worksheetInfo($path);
+        $recognized = array_values(array_filter($worksheetInfo, function (array $info): bool {
+            $normalized = $this->normalizeSheetTitle((string) ($info['worksheetName'] ?? ''));
+            return $normalized === 'STATUS BARANG' || isset(self::BILLING_SHEETS[$normalized]);
+        }));
 
+        $totalRows = array_sum(array_map(
+            fn (array $info): int => max(0, (int) ($info['totalRows'] ?? 0) - 2),
+            $recognized
+        ));
         $processedRows = 0;
         $tick = function (int $count = 1) use (&$processedRows, $totalRows, $progress): void {
             $processedRows += $count;
@@ -110,25 +121,60 @@ class LegacyImportService
             }
         };
 
-        foreach ($book->getWorksheetIterator() as $sheet) {
-            $normalized = $this->normalizeSheetTitle($sheet->getTitle());
+        foreach ($recognized as $info) {
+            $sheetName = (string) $info['worksheetName'];
+            $normalized = $this->normalizeSheetTitle($sheetName);
             $definition = self::BILLING_SHEETS[$normalized] ?? null;
-
             if (!$definition) {
                 continue;
             }
 
-            $this->importBillingSheet(
-                $sheet,
-                $definition,
-                $group,
-                $sourceName,
-                $summary,
-                $tick
-            );
+            $country = $definition['country'] ? $this->country($definition['country']) : null;
+            $lastRow = max(2, (int) ($info['totalRows'] ?? 0));
+
+            if ($definition['country'] && !$country) {
+                $skipped = max(0, $lastRow - 2);
+                $summary['skipped'] += $skipped;
+                $tick($skipped);
+                continue;
+            }
+
+            $lastBatch = null;
+            $schema = null;
+            for ($startRow = 3; $startRow <= $lastRow; $startRow += self::CHUNK_ROWS) {
+                $endRow = min($lastRow, $startRow + self::CHUNK_ROWS - 1);
+                $book = $this->loadSheetChunk($path, $sheetName, $startRow, $endRow);
+                $sheet = $book->getSheetByName($sheetName) ?: $book->getActiveSheet();
+                $schema ??= $this->detectBillingSchema($sheet);
+
+                $this->importBillingRows(
+                    $sheet,
+                    $startRow,
+                    $endRow,
+                    $definition,
+                    $country,
+                    $group,
+                    $sourceName,
+                    $schema,
+                    $lastBatch,
+                    $summary,
+                    $tick
+                );
+
+                $this->releaseWorkbook($book);
+            }
         }
 
-        $this->importStatusSheet($book, $group, $sourceName, $summary, $tick);
+        $statusInfo = null;
+        foreach ($recognized as $info) {
+            if ($this->normalizeSheetTitle((string) ($info['worksheetName'] ?? '')) === 'STATUS BARANG') {
+                $statusInfo = $info;
+                break;
+            }
+        }
+        if ($statusInfo) {
+            $this->importStatusSheetFromChunks($path, $statusInfo, $group, $sourceName, $summary, $tick);
+        }
 
         if ($progress) {
             $progress($totalRows, $totalRows);
@@ -147,28 +193,22 @@ class LegacyImportService
         return $summary;
     }
 
-    private function importBillingSheet(
+    private function importBillingRows(
         Worksheet $sheet,
+        int $startRow,
+        int $endRow,
         array $definition,
+        ?Country $country,
         GoGroup $group,
         string $sourceName,
+        string $schema,
+        ?string &$lastBatch,
         array &$summary,
         callable $tick
     ): void {
-        $country = $definition['country'] ? $this->country($definition['country']) : null;
-        if ($definition['country'] && !$country) {
-            for ($row = 3; $row <= $sheet->getHighestDataRow(); $row++) {
-                $summary['skipped']++;
-                $tick();
-            }
-            return;
-        }
-
-        $schema = $this->detectBillingSchema($sheet);
-        $lastBatch = null;
         $sheetName = $this->normalizeSheetTitle($sheet->getTitle());
 
-        for ($row = 3; $row <= $sheet->getHighestDataRow(); $row++) {
+        for ($row = $startRow; $row <= $endRow; $row++) {
             $batchRef = $this->textCell($sheet, "A{$row}");
             $name = $this->textCell($sheet, "B{$row}");
             $item = $this->textCell($sheet, "C{$row}");
@@ -221,9 +261,6 @@ class LegacyImportService
                     (string) $lastBatch,
                 ])), 0, 12);
 
-                // Compatibility v1.0.7: import lama dapat terhenti di tengah request HTTP tetapi
-                // sebagian row sudah tersimpan. Adopsi order lama berdasarkan fingerprint lama
-                // agar rerun v1.0.8 tidak menggandakan data parsial tersebut.
                 $oldFingerprint = $country
                     ? substr(sha1($sheetName . '|' . $row . '|' . mb_strtolower($name) . '|' . $item . '|' . (string) $lastBatch), 0, 8)
                     : null;
@@ -231,7 +268,7 @@ class LegacyImportService
                     ? 'LEG-' . $country->code . '-' . str_pad((string) $row, 4, '0', STR_PAD_LEFT) . '-' . strtoupper($oldFingerprint)
                     : null;
                 $newOrderNumber = 'LEG-' . $countryCode . '-' . strtoupper($fingerprint);
-                $orderAttributes = [
+                $orderAttributes = $this->withImportRun('orders', [
                     'customer_id' => $user->id,
                     'go_group_id' => $group->id,
                     'batch_id' => $batch?->id,
@@ -239,7 +276,7 @@ class LegacyImportService
                     'status' => $batch?->status ?: 'ordered',
                     'currency_code' => $country?->currency_code,
                     'notes' => 'Migrasi ' . $sourceName . ' | ' . $sheetName . ' | Ref: ' . ($lastBatch ?: '-'),
-                ];
+                ]);
 
                 $order = Order::where('order_number', $newOrderNumber)->first();
                 $orderCreated = false;
@@ -312,7 +349,7 @@ class LegacyImportService
             [$invoice, $created] = $this->upsertLegacyInvoice(
                 'LEG-INV-' . strtoupper($fingerprint),
                 $oldFingerprint ? 'LEG-INV-' . strtoupper($oldFingerprint) : null,
-                [
+                $this->withImportRun('invoices', [
                     'customer_id' => $user->id,
                     'order_id' => $order->id,
                     'type' => 'pelunasan',
@@ -321,7 +358,7 @@ class LegacyImportService
                     'penalty_amount' => 0,
                     'status' => $baseStatus,
                     'notes' => trim('Migrasi spreadsheet. Pembayaran lama — Full: Rp' . number_format($full, 0, ',', '.') . ', DP: Rp' . number_format($dp, 0, ',', '.') . ', Cicilan: Rp' . number_format($cicilan, 0, ',', '.') . '. Sisa pada sheet: Rp' . number_format($remainingSheet, 0, ',', '.') . '. ' . $statusText . ' ' . $note),
-                ]
+                ])
             );
 
             if ($created) {
@@ -335,7 +372,7 @@ class LegacyImportService
 
             $adjustmentInvoice = Invoice::updateOrCreate(
                 ['invoice_number' => 'LEG-KRG-' . strtoupper($fingerprint)],
-                [
+                $this->withImportRun('invoices', [
                     'customer_id' => $user->id,
                     'order_id' => $order->id,
                     'type' => 'kekurangan',
@@ -344,7 +381,7 @@ class LegacyImportService
                     'penalty_amount' => 0,
                     'status' => $adjustmentStatus,
                     'notes' => trim('Kekurangan/kenaikan dari spreadsheet lama. ' . $note),
-                ]
+                ])
             );
 
             $adjustment = OrderAdjustment::updateOrCreate(
@@ -395,7 +432,7 @@ class LegacyImportService
         [$invoice, $created] = $this->upsertLegacyInvoice(
             'LEG-INV-' . strtoupper($fingerprint),
             $oldFingerprint ? 'LEG-INV-' . strtoupper($oldFingerprint) : null,
-            [
+            $this->withImportRun('invoices', [
                 'customer_id' => $user->id,
                 'order_id' => $order->id,
                 'type' => 'pelunasan',
@@ -404,7 +441,7 @@ class LegacyImportService
                 'penalty_amount' => 0,
                 'status' => $done ? 'paid' : 'unpaid',
                 'notes' => trim('Migrasi shipping/tax lama. Shipping: Rp' . number_format($shipping, 0, ',', '.') . ', Tax: Rp' . number_format($tax, 0, ',', '.') . '. ' . $statusText . ' ' . $note),
-            ]
+            ])
         );
 
         if ($created) {
@@ -434,19 +471,62 @@ class LegacyImportService
         return [$invoice, $created];
     }
 
-    private function importStatusSheet(Spreadsheet $book, GoGroup $group, string $sourceName, array &$summary, callable $tick): void
-    {
-        $sheet = null;
-        foreach ($book->getWorksheetIterator() as $candidate) {
-            if ($this->normalizeSheetTitle($candidate->getTitle()) === 'STATUS BARANG') {
-                $sheet = $candidate;
-                break;
-            }
-        }
-        if (!$sheet) {
-            return;
+    private function importStatusSheetFromChunks(
+        string $path,
+        array $info,
+        GoGroup $group,
+        string $sourceName,
+        array &$summary,
+        callable $tick
+    ): void {
+        $sheetName = (string) $info['worksheetName'];
+        $lastRow = max(2, (int) ($info['totalRows'] ?? 0));
+        $lastRef = null;
+        $groups = [];
+        $trackingColumn = null;
+        $statusColumn = null;
+
+        for ($startRow = 3; $startRow <= $lastRow; $startRow += self::CHUNK_ROWS) {
+            $endRow = min($lastRow, $startRow + self::CHUNK_ROWS - 1);
+            $book = $this->loadSheetChunk($path, $sheetName, $startRow, $endRow);
+            $sheet = $book->getSheetByName($sheetName) ?: $book->getActiveSheet();
+
+            $trackingColumn ??= $this->findHeaderColumn($sheet, ['TRACKING NUMBER', 'TRACKING'], self::HEADER_ROWS) ?: 'P';
+            $statusColumn ??= $this->findHeaderColumn($sheet, ['STATUS'], self::HEADER_ROWS) ?: 'Q';
+
+            $this->collectStatusRows(
+                $sheet,
+                $startRow,
+                $endRow,
+                $group,
+                $sourceName,
+                $trackingColumn,
+                $statusColumn,
+                $lastRef,
+                $groups,
+                $summary,
+                $tick
+            );
+
+            $this->releaseWorkbook($book);
         }
 
+        $this->persistStatusGroups($groups, $summary);
+    }
+
+    private function collectStatusRows(
+        Worksheet $sheet,
+        int $startRow,
+        int $endRow,
+        GoGroup $group,
+        string $sourceName,
+        string $trackingColumn,
+        string $statusColumn,
+        ?string &$lastRef,
+        array &$groups,
+        array &$summary,
+        callable $tick
+    ): void {
         $map = [
             'F' => 'CH',
             'G' => 'JP',
@@ -460,12 +540,7 @@ class LegacyImportService
             'O' => 'US',
         ];
 
-        $trackingColumn = $this->findHeaderColumn($sheet, ['TRACKING NUMBER', 'TRACKING'], 20) ?: 'P';
-        $statusColumn = $this->findHeaderColumn($sheet, ['STATUS'], 20) ?: 'Q';
-        $lastRef = null;
-        $groups = [];
-
-        for ($row = 3; $row <= $sheet->getHighestDataRow(); $row++) {
+        for ($row = $startRow; $row <= $endRow; $row++) {
             $ref = $this->textCell($sheet, "A{$row}");
             if ($ref !== '' && !$this->looksLikeStatusLegend($ref)) {
                 $lastRef = $ref;
@@ -536,7 +611,10 @@ class LegacyImportService
 
             $tick();
         }
+    }
 
+    private function persistStatusGroups(array $groups, array &$summary): void
+    {
         foreach ($groups as $row) {
             if ($row['source_type'] === 'po') {
                 $existingNew = Shipment::where('source_type', 'po')
@@ -590,34 +668,57 @@ class LegacyImportService
         }
     }
 
-    private function loadWorkbook(string $path, bool $recognizedOnly = false): Spreadsheet
+    private function worksheetInfo(string $path): array
     {
         if (!is_file($path) || !is_readable($path)) {
             throw new \RuntimeException('File workbook tidak ditemukan atau tidak dapat dibaca.');
         }
 
         $reader = IOFactory::createReaderForFile($path);
+        return $reader->listWorksheetInfo($path);
+    }
+
+    private function loadSheetChunk(string $path, string $sheetName, int $startRow, int $endRow): Spreadsheet
+    {
+        $reader = IOFactory::createReaderForFile($path);
         $reader->setReadDataOnly(true);
+        $reader->setLoadSheetsOnly([$sheetName]);
+        $reader->setReadFilter(new ChunkReadFilter($startRow, $endRow, self::HEADER_ROWS, $sheetName));
 
         if (method_exists($reader, 'setReadEmptyCells')) {
             $reader->setReadEmptyCells(false);
         }
-
-        if ($recognizedOnly && method_exists($reader, 'listWorksheetNames') && method_exists($reader, 'setLoadSheetsOnly')) {
-            $recognizedSheets = array_values(array_filter(
-                $reader->listWorksheetNames($path),
-                function (string $title): bool {
-                    $normalized = $this->normalizeSheetTitle($title);
-                    return $normalized === 'STATUS BARANG' || isset(self::BILLING_SHEETS[$normalized]);
-                }
-            ));
-
-            if ($recognizedSheets !== []) {
-                $reader->setLoadSheetsOnly($recognizedSheets);
-            }
+        if (method_exists($reader, 'setIgnoreRowsWithNoCells')) {
+            $reader->setIgnoreRowsWithNoCells(true);
         }
 
         return $reader->load($path);
+    }
+
+    private function releaseWorkbook(Spreadsheet $book): void
+    {
+        $book->disconnectWorksheets();
+        unset($book);
+        if (function_exists('gc_collect_cycles')) {
+            gc_collect_cycles();
+        }
+    }
+
+    private function withImportRun(string $table, array $attributes): array
+    {
+        if ($this->currentImportRunId === null) {
+            return $attributes;
+        }
+
+        if (!array_key_exists($table, $this->importRunColumnSupport)) {
+            $this->importRunColumnSupport[$table] = Schema::hasColumn($table, 'import_run_id');
+        }
+
+        if ($this->importRunColumnSupport[$table]) {
+            $attributes['import_run_id'] = $this->currentImportRunId;
+        }
+
+        return $attributes;
     }
 
     private function legacyCustomer(string $name, GoGroup $group, array &$summary): User

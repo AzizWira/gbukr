@@ -6,6 +6,7 @@ use App\Models\ImportRun;
 use App\Services\LegacyImportService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
@@ -36,7 +37,7 @@ class ProcessLegacyImport implements ShouldQueue
         if (!$disk->exists($run->stored_path)) {
             $run->update([
                 'status' => 'failed',
-                'error_message' => 'File sumber import tidak ditemukan di storage.',
+                'error_message' => 'File sumber import tidak ditemukan. Upload workbook kembali untuk membuat proses import baru.',
                 'finished_at' => now(),
             ]);
             return;
@@ -58,7 +59,8 @@ class ProcessLegacyImport implements ShouldQueue
                         'processed_rows' => $processed,
                         'total_rows' => $total,
                     ])->saveQuietly();
-                }
+                },
+                $run->id
             );
 
             $run->update([
@@ -67,9 +69,6 @@ class ProcessLegacyImport implements ShouldQueue
                 'summary' => $summary,
                 'finished_at' => now(),
             ]);
-
-            // File sumber sengaja dipertahankan sebagai arsip migrasi. Selain menjadi audit trail,
-            // sheet yang belum mempunyai mapping (mis. FREEBIES/HANDCARRY) tetap dapat diunduh Owner.
         } catch (Throwable $e) {
             $this->markFailed($e);
         }
@@ -95,10 +94,27 @@ class ProcessLegacyImport implements ShouldQueue
 
         $run->update([
             'status' => 'failed',
-            'error_message' => config('app.debug')
-                ? class_basename($e) . ' — ' . $e->getMessage()
-                : 'Import gagal diproses. File sumber tetap tersimpan agar dapat diperiksa atau diunduh kembali.',
+            'error_message' => $this->friendlyMessage($e),
             'finished_at' => now(),
         ]);
+    }
+
+    private function friendlyMessage(Throwable $e): string
+    {
+        $message = $e->getMessage();
+
+        if (stripos($message, 'Allowed memory size') !== false) {
+            return 'Workbook terlalu besar untuk diproses sekaligus. Proses dihentikan dengan aman; file asli tetap tersimpan dan dapat dicoba ulang.';
+        }
+
+        if ($e instanceof QueryException && stripos($message, 'import_run_id') !== false) {
+            return 'Struktur database belum mengikuti pembaruan import terbaru. Jalankan pembaruan database, lalu coba import lagi.';
+        }
+
+        if ($e instanceof QueryException) {
+            return 'Sebagian data tidak dapat disimpan ke database. File asli tetap tersimpan dan import dapat dicoba ulang setelah data diperiksa.';
+        }
+
+        return 'Import belum berhasil diselesaikan. File asli tetap tersimpan dan proses dapat dicoba ulang tanpa menggandakan data yang sudah sempat masuk.';
     }
 }

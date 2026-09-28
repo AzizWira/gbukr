@@ -4,10 +4,11 @@ namespace App\Http\Controllers\Owner;
 
 use App\Http\Controllers\Controller;
 use App\Jobs\ProcessLegacyImport;
-use App\Models\{GoGroup, ImportRun};
-use App\Services\LegacyImportService;
+use App\Models\{Batch, GoGroup, ImportRun, Order, Shipment};
+use App\Services\{LegacyImportService, OrderCleanupService};
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
@@ -20,6 +21,7 @@ class ImportController extends Controller
     public function index(Request $request)
     {
         $preview = (array) $request->session()->get('legacy_import_preview', []);
+        $this->markStaleRunsAsFailed();
 
         return view('owner.import.index', [
             'preview' => $preview ?: null,
@@ -109,10 +111,7 @@ class ImportController extends Controller
                 'extension' => $extension,
             ]);
 
-            $message = 'Workbook gagal dipreview. Pastikan file XLSX/XLS valid dan extension PHP untuk spreadsheet tersedia.';
-            if (config('app.debug')) {
-                $message .= ' Detail: ' . class_basename($e) . ' — ' . $e->getMessage();
-            }
+            $message = 'Workbook belum berhasil dibaca. Pastikan file XLSX/XLS valid dan tidak rusak, lalu coba lagi.';
 
             return back()->withInput()->withErrors(['file' => $message]);
         }
@@ -195,15 +194,17 @@ class ImportController extends Controller
     public function status(Request $request, ImportRun $run)
     {
         abort_unless($request->user()->isOwner(), 403);
+        $run = $this->refreshStaleRun($run);
 
         return response()->json([
             'id' => $run->id,
             'status' => $run->status,
+            'status_label' => $run->statusLabel(),
             'processed_rows' => $run->processed_rows,
             'total_rows' => $run->total_rows,
             'progress' => $run->progressPercent(),
             'summary' => $run->summary,
-            'error_message' => $run->error_message,
+            'error_message' => $run->friendlyErrorMessage(),
             'finished_at' => $run->finished_at?->translatedFormat('d F Y, H.i'),
         ]);
     }
@@ -220,4 +221,126 @@ class ImportController extends Controller
             ['Content-Type' => 'application/octet-stream']
         );
     }
+
+    public function retry(Request $request, ImportRun $run)
+    {
+        abort_unless($request->user()->isOwner(), 403);
+
+        if ($run->status !== 'failed') {
+            return back()->withErrors(['import' => 'Hanya import yang gagal yang dapat dicoba ulang.']);
+        }
+
+        $disk = Storage::disk(self::IMPORT_DISK);
+        if (!$disk->exists($run->stored_path)) {
+            return back()->withErrors(['import' => 'File sumber import sudah tidak tersedia. Upload workbook kembali untuk menjalankan import baru.']);
+        }
+
+        $run->update([
+            'status' => 'queued',
+            'processed_rows' => 0,
+            'summary' => null,
+            'error_message' => null,
+            'started_at' => null,
+            'finished_at' => null,
+        ]);
+
+        ProcessLegacyImport::dispatch($run->id)->onConnection('database');
+
+        return back()->with('success', 'Import ' . $run->original_name . ' dimasukkan kembali ke antrean. Data yang sudah sempat masuk akan diperbarui, bukan digandakan.');
+    }
+
+    public function cleanup(Request $request, ImportRun $run, OrderCleanupService $cleanup)
+    {
+        abort_unless($request->user()->isOwner(), 403);
+
+        if (!in_array($run->status, ['completed', 'failed'], true)) {
+            return back()->withErrors(['import' => 'Import yang masih berjalan atau menunggu antrean tidak dapat dibersihkan.']);
+        }
+
+        $ordersQuery = Order::with(['invoices.payments', 'batch'])
+            ->where('go_group_id', $run->go_group_id);
+
+        $ordersQuery->where(function ($query) use ($run) {
+            if (Schema::hasColumn('orders', 'import_run_id')) {
+                $query->where('import_run_id', $run->id)
+                    ->orWhere(function ($legacy) use ($run) {
+                        $legacy->whereNull('import_run_id')
+                            ->where('notes', 'like', 'Migrasi ' . $run->original_name . ' |%');
+                    });
+            } else {
+                $query->where('notes', 'like', 'Migrasi ' . $run->original_name . ' |%');
+            }
+        });
+
+        $orders = $ordersQuery->get();
+
+        if ($orders->isEmpty()) {
+            return back()->withErrors(['import' => 'Tidak ditemukan order yang masih terhubung dengan riwayat import ini.']);
+        }
+
+        $batchIds = $orders->pluck('batch_id')->filter()->unique()->values();
+        $deleted = 0;
+        $detached = 0;
+
+        foreach ($orders as $order) {
+            if ($cleanup->canDelete($order)) {
+                $cleanup->delete($order);
+                $deleted++;
+            } elseif ($order->batch_id) {
+                $cleanup->detachFromBatch($order);
+                $detached++;
+            }
+        }
+
+        $removedBatches = 0;
+        foreach (Batch::whereIn('id', $batchIds)->get() as $batch) {
+            if (!$batch->orders()->exists() && str_contains($batch->code, '-LEG-')) {
+                Shipment::where('source_type', 'batch')->where('source_id', $batch->id)->delete();
+                $batch->delete();
+                $removedBatches++;
+            }
+        }
+
+        $summary = (array) $run->summary;
+        $summary['cleanup_deleted_orders'] = $deleted;
+        $summary['cleanup_detached_orders'] = $detached;
+        $summary['cleanup_batches'] = $removedBatches;
+        $run->update(['status' => 'rolled_back', 'summary' => $summary]);
+
+        $message = 'Cleanup import selesai. ' . $deleted . ' order tanpa histori finansial dihapus permanen.';
+        if ($detached > 0) {
+            $message .= ' ' . $detached . ' order berhistori pembayaran dikeluarkan dari Batch, tetapi order/tagihan/pembayaran tetap tersimpan sebagai audit.';
+        }
+        if ($removedBatches > 0) {
+            $message .= ' ' . $removedBatches . ' Batch legacy kosong ikut dihapus.';
+        }
+        $message .= ' File sumber tetap disimpan.';
+
+        return back()->with('success', $message);
+    }
+
+    private function markStaleRunsAsFailed(): void
+    {
+        ImportRun::where('status', 'running')
+            ->where('updated_at', '<', now()->subMinutes(5))
+            ->update([
+                'status' => 'failed',
+                'error_message' => 'Proses import berhenti sebelum selesai. Data yang sudah masuk tetap aman dan import dapat dicoba ulang.',
+                'finished_at' => now(),
+            ]);
+    }
+
+    private function refreshStaleRun(ImportRun $run): ImportRun
+    {
+        if ($run->status === 'running' && $run->updated_at && $run->updated_at->lt(now()->subMinutes(5))) {
+            $run->update([
+                'status' => 'failed',
+                'error_message' => 'Proses import berhenti sebelum selesai. Data yang sudah masuk tetap aman dan import dapat dicoba ulang.',
+                'finished_at' => now(),
+            ]);
+        }
+
+        return $run->fresh();
+    }
+
 }

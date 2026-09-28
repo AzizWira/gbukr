@@ -21,7 +21,7 @@ class OrderController extends Controller
                     ->orWhereHas('goGroup', fn ($go) => $go->where('name', 'like', '%' . $query . '%'));
             }))
             ->latest()
-            ->paginate(15)
+            ->paginate(\App\Support\Listing::perPage($request, 20))
             ->withQueryString();
         return view('customer.orders.index', compact('orders'));
     }

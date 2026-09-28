@@ -273,6 +273,26 @@
   });
 
   const dirtyForms=new Set();
+  // Bulk checkbox helper untuk cleanup tabel.
+  qa('[data-check-all]').forEach(master=>{
+    const group=master.dataset.checkAll;
+    const members=()=>qa(`[data-check-group="${group}"]:not(:disabled)`);
+    master.addEventListener('change',()=>members().forEach(item=>{item.checked=master.checked;}));
+    members().forEach(item=>item.addEventListener('change',()=>{
+      const rows=members();
+      master.checked=rows.length>0 && rows.every(row=>row.checked);
+      master.indeterminate=rows.some(row=>row.checked) && !master.checked;
+    }));
+  });
+
+  const unsavedToast=q('[data-unsaved-toast]');
+  const syncUnsavedIndicator=()=>{
+    if(!unsavedToast) return;
+    const visible=dirtyForms.size>0;
+    unsavedToast.hidden=!visible;
+    unsavedToast.setAttribute('aria-hidden',visible?'false':'true');
+  };
+
   const isMutationForm=form=>{
     const method=(form.getAttribute('method')||'get').toLowerCase();
     return method!=='get' && !form.hasAttribute('data-no-dirty-guard');
@@ -285,12 +305,14 @@
       const target=event.target;
       if(target instanceof HTMLInputElement && ['hidden','submit','button'].includes(target.type)) return;
       dirtyForms.add(form);
+      syncUnsavedIndicator();
     });
 
     form.addEventListener('change',event=>{
       const target=event.target;
       if(target instanceof HTMLInputElement && target.type==='hidden') return;
       dirtyForms.add(form);
+      syncUnsavedIndicator();
     });
   });
 
@@ -318,6 +340,7 @@
       form.dataset.confirmed='1';
       if(otherDirty.length>0) dirtyForms.clear();
       else dirtyForms.delete(form);
+      syncUnsavedIndicator();
       form.requestSubmit();
     },title);
   }));
@@ -335,6 +358,7 @@
 
     form.dataset.submitting='1';
     dirtyForms.delete(form);
+    syncUnsavedIndicator();
 
     const buttons=qa('button[type="submit"],input[type="submit"]',form);
     buttons.forEach(button=>{
@@ -380,6 +404,7 @@
     const destination=anchor.href;
     openConfirm('Ada perubahan yang belum disimpan. Tinggalkan halaman dan buang perubahan tersebut?',()=>{
       dirtyForms.clear();
+      syncUnsavedIndicator();
       window.location.href=destination;
     },'Perubahan belum disimpan');
   });
@@ -524,6 +549,32 @@
     country?.dispatchEvent(new Event('change'));
   }
 
+  // Mini cart desktop: ringkasan cepat tanpa memaksa user meninggalkan halaman produk.
+  qa('[data-cart-nav]').forEach(wrap=>{
+    const pop=q('[data-cart-popover]',wrap);
+    if(!pop) return;
+    let loaded=false;
+    const load=async()=>{
+      pop.hidden=false;
+      if(loaded) return;
+      pop.innerHTML='<div class="small muted">Memuat keranjang…</div>';
+      try{
+        const res=await fetch(pop.dataset.url,{headers:{'Accept':'application/json'}});
+        if(!res.ok) throw new Error('Gagal memuat');
+        const data=await res.json();
+        const esc=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[char]));
+        const money=value=>'Rp'+new Intl.NumberFormat('id-ID').format(Number(value||0));
+        const items=(data.items||[]).map(item=>`<div class="mini-cart-item"><div><strong>${esc(item.name)}</strong><div class="small muted">${esc(item.variant)} · ${item.qty} item</div></div><strong>${money(item.subtotal)}</strong></div>`).join('');
+        pop.innerHTML=data.count>0 ? `<div class="mini-cart-list">${items}</div><div class="mini-cart-footer"><div><div class="small muted">${data.count} item</div><strong>${money(data.total)}</strong></div><a class="btn btn-primary btn-sm" href="/cart">Lihat Keranjang</a></div>` : '<div class="empty">Keranjang masih kosong.</div>';
+        loaded=true;
+      }catch(_){ pop.innerHTML='<div class="small muted">Ringkasan keranjang belum dapat dimuat.</div>'; }
+    };
+    wrap.addEventListener('mouseenter',load);
+    wrap.addEventListener('mouseleave',()=>{pop.hidden=true;});
+    wrap.addEventListener('focusin',load);
+    wrap.addEventListener('focusout',event=>{if(!wrap.contains(event.relatedTarget)) pop.hidden=true;});
+  });
+
   // Progress import background. Browser tidak menunggu proses XLSX besar selesai.
   qa('[data-import-run]').forEach(card=>{
     const url=card.dataset.statusUrl;
@@ -532,25 +583,31 @@
     const detail=q('.import-run-detail',card);
     if(!url || !statusEl || !bar || !detail) return;
 
-    let stopped=['COMPLETED','FAILED'].includes(statusEl.textContent.trim().toUpperCase());
+    let currentState=String(statusEl.dataset.importStatus||'').toLowerCase();
+    let stopped=['completed','failed','rolled_back'].includes(currentState);
     const poll=async()=>{
       if(stopped) return;
       try{
         const res=await fetch(url,{headers:{'Accept':'application/json'}});
         if(!res.ok) throw new Error('Status import tidak dapat dibaca.');
         const data=await res.json();
-        statusEl.textContent=String(data.status||'').toUpperCase();
-        statusEl.className=`badge import-run-status ${data.status==='completed'?'ok':(data.status==='failed'?'danger':'warn')}`;
+        currentState=String(data.status||'').toLowerCase();
+        statusEl.dataset.importStatus=currentState;
+        statusEl.textContent=String(data.status_label||'Sedang diproses');
+        statusEl.className=`badge import-run-status ${currentState==='completed'?'ok':(currentState==='failed'?'danger':(currentState==='rolled_back'?'gray':'warn'))}`;
         bar.style.width=`${Number(data.progress||0)}%`;
         const base=`${new Intl.NumberFormat('id-ID').format(data.processed_rows||0)} / ${new Intl.NumberFormat('id-ID').format(data.total_rows||0)} baris`;
-        if(data.status==='completed'){
+        if(currentState==='completed'){
           const s=data.summary||{};
           detail.textContent=`${base} · ${s.orders||0} order · ${s.invoices||0} tagihan · ${s.adjustments||0} kekurangan`;
           showClientToast('Import spreadsheet selesai.','success',6000);
           stopped=true;
-        }else if(data.status==='failed'){
-          detail.textContent=`${base} · ${data.error_message||'Import gagal.'}`;
-          showClientToast('Import spreadsheet gagal. Lihat detail pada riwayat import.','error',7500);
+        }else if(currentState==='failed'){
+          detail.textContent=`${base} · ${data.error_message||'Import belum berhasil diselesaikan.'}`;
+          showClientToast('Import belum berhasil. File asli tetap tersimpan dan dapat dicoba ulang.','error',7500);
+          stopped=true;
+        }else if(currentState==='rolled_back'){
+          detail.textContent=`${base} · hasil import sudah dibersihkan`;
           stopped=true;
         }else{
           detail.textContent=base;

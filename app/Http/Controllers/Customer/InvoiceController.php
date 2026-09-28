@@ -13,7 +13,7 @@ class InvoiceController extends Controller
     {
         $query = Search::term($request->query('q'));
         $invoices = $request->user()->invoices()
-            ->with(['order.items', 'order.batch', 'adjustment'])
+            ->with(['order.items', 'order.batch', 'order.goGroup', 'adjustment'])
             ->where('status', '!=', 'cancelled')
             ->when($query !== '', fn ($builder) => $builder->where(function ($sub) use ($query) {
                 Search::code($sub, 'invoice_number', $query)
@@ -23,7 +23,7 @@ class InvoiceController extends Controller
                         ->orWhereHas('batch', fn ($batch) => Search::code($batch, 'code', $query)));
             }))
             ->latest()
-            ->paginate(20)
+            ->paginate(\App\Support\Listing::perPage($request, 20))
             ->withQueryString();
 
         foreach ($invoices as $invoice) $invoice->recalculatePenalty();

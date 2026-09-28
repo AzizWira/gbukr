@@ -61,5 +61,5 @@
     </table>
 </div>
 
-<div class="pagination">{{ $products->links() }}</div>
+@include('partials.pagination',['paginator'=>$products])
 @endsection
