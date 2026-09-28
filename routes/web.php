@@ -46,6 +46,9 @@ Route::middleware(['auth','verified','role:customer'])->group(function(){
     Route::post('/checkout',[Customer\CheckoutController::class,'store'])->name('checkout.store');
     Route::get('/dashboard/orders',[Customer\OrderController::class,'index'])->name('customer.orders.index');
     Route::get('/dashboard/orders/{order}',[Customer\OrderController::class,'show'])->name('customer.orders.show');
+    Route::get('/dashboard/deletion-requests/{deletionRequest}',[Customer\OrderDeletionRequestController::class,'show'])->name('customer.deletion-requests.show');
+    Route::post('/dashboard/deletion-requests/{deletionRequest}/approve',[Customer\OrderDeletionRequestController::class,'approve'])->name('customer.deletion-requests.approve');
+    Route::post('/dashboard/deletion-requests/{deletionRequest}/reject',[Customer\OrderDeletionRequestController::class,'reject'])->name('customer.deletion-requests.reject');
     Route::get('/dashboard/invoices',[Customer\InvoiceController::class,'index'])->name('customer.invoices.index');
     Route::get('/dashboard/invoices/{invoice}',[Customer\InvoiceController::class,'show'])->name('customer.invoices.show');
     Route::get('/dashboard/pay',[Customer\PaymentController::class,'create'])->name('customer.payments.create');
@@ -129,6 +132,7 @@ Route::prefix('owner')->name('owner.')->middleware(['auth','verified','role:owne
     Route::get('/import/runs/{run}',[Owner\ImportController::class,'status'])->name('import.status');
     Route::get('/import/runs/{run}/source',[Owner\ImportController::class,'source'])->name('import.source');
     Route::post('/import/runs/{run}/retry',[Owner\ImportController::class,'retry'])->name('import.retry');
+    Route::get('/import/runs/{run}/cleanup-review',[Owner\ImportController::class,'cleanupReview'])->name('import.cleanup.review');
     Route::delete('/import/runs/{run}/cleanup',[Owner\ImportController::class,'cleanup'])->name('import.cleanup');
     Route::get('/export',[Owner\ExportController::class,'index'])->name('export.index');
     Route::post('/export/go',[Owner\ExportController::class,'go'])->name('export.go');

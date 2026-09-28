@@ -61,7 +61,8 @@ class OrderController extends Controller
 
         return view('owner.orders.show', [
             'order' => $order,
-            'deleteBlocker' => $cleanup->blocker($order),
+            'deletePolicy' => $cleanup->policy($order),
+            'latestDeletionRequest' => $order->deletionRequests()->latest()->first(),
         ]);
     }
 
@@ -82,25 +83,24 @@ class OrderController extends Controller
         return back()->with('success', 'Status order diperbarui.');
     }
 
-    public function destroy(Order $order, OrderCleanupService $cleanup)
+    public function destroy(Request $request, Order $order, OrderCleanupService $cleanup)
     {
-        $batchId = $order->batch_id;
+        $data = $request->validate([
+            'reason' => ['nullable', 'string', 'max:500'],
+        ]);
+
         $number = $order->order_number;
+        $result = $cleanup->processDeletion(
+            $order,
+            $request->user(),
+            $data['reason'] ?? null,
+            'owner'
+        );
 
-        if ($batchId && !$cleanup->canDelete($order)) {
-            $cleanup->detachFromBatch($order);
-
-            return redirect()->route('owner.batches.show', $batchId)
-                ->with('success', 'Order ' . $number . ' dikeluarkan dari Batch. Histori tagihan dan pembayaran tetap tersimpan.');
+        if ($result['status'] === 'pending_approval') {
+            return back()->with('success', 'Permintaan penghapusan ' . $number . ' sudah dikirim ke customer. Order tetap tersimpan sampai customer menyetujui.');
         }
 
-        $cleanup->delete($order);
-
-        if ($batchId) {
-            return redirect()->route('owner.batches.show', $batchId)
-                ->with('success', 'Order ' . $number . ' beserta tagihan yang belum dibayar berhasil dihapus dari Batch.');
-        }
-
-        return redirect()->route('owner.orders.index')->with('success', 'Order ' . $number . ' berhasil dihapus.');
+        return redirect()->route('owner.orders.index')->with('success', 'Order ' . $number . ' berhasil dihapus. Customer terkait sudah diberi notifikasi bila akunnya terhubung.');
     }
 }

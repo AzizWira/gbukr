@@ -62,13 +62,13 @@
                 $safeCleanupCount = $batch->orders->filter(fn($order) => empty($deleteBlockers[$order->id]))->count();
                 $protectedCleanupCount = $batch->orders->count() - $safeCleanupCount;
             @endphp
-            <form method="post" action="{{ route('owner.batches.orders.destroy',$batch) }}" data-confirm-title="Bersihkan order terpilih?" data-confirm="Order tanpa histori pembayaran akan dihapus permanen beserta tagihan yang belum pernah dibayar. Order yang sudah memiliki histori pembayaran hanya akan dikeluarkan dari Batch; order, tagihan, dan pembayaran tetap tersimpan." data-loading-text="Membersihkan order…" data-no-dirty-guard>
+            <form method="post" action="{{ route('owner.batches.orders.destroy',$batch) }}" data-confirm-title="Bersihkan order terpilih?" data-confirm="Order yang tidak memerlukan approval akan dibersihkan. Untuk order terhubung akun yang mempunyai histori pembayaran, sistem hanya mengirim permintaan persetujuan dan order tetap berada di Batch sampai disetujui." data-loading-text="Membersihkan order…" data-no-dirty-guard>
                 @csrf
                 @method('delete')
                 <div class="batch-bulk-toolbar">
                     <div>
                         <strong>Cleanup isi Batch</strong>
-                        <div class="small muted">Order aman akan dihapus. Order berhistori pembayaran hanya dikeluarkan dari Batch agar audit finansial tetap utuh.</div>
+                        <div class="small muted">Order yang tidak memerlukan approval akan dihapus sesuai aturan akun. Order terhubung akun dengan histori pembayaran akan menunggu persetujuan customer dan tetap berada di Batch.</div>
                     </div>
                     <button class="btn btn-danger btn-sm" type="submit">Bersihkan order terpilih</button>
                 </div>
@@ -105,9 +105,9 @@
                                             -
                                         @endif
                                         @if($blocker)
-                                            <div class="small protected-note">Histori dilindungi · akan dikeluarkan dari Batch</div>
+                                            <div class="small protected-note">Butuh approval customer sebelum dihapus</div>
                                         @else
-                                            <div class="small safe-delete-note">Aman dihapus permanen</div>
+                                            <div class="small safe-delete-note">Dapat diproses tanpa approval</div>
                                         @endif
                                     </td>
                                     <td data-label="Aksi"><a class="btn btn-soft btn-sm" href="{{ route('owner.orders.show',$order) }}">Buka</a></td>
@@ -123,13 +123,13 @@
                     <div class="eyebrow">HAPUS BATCH</div>
                     <h3>Bersihkan lalu hapus Batch</h3>
                     <p class="muted">
-                        {{ $safeCleanupCount }} order tanpa histori finansial akan dihapus permanen.
+                        {{ $safeCleanupCount }} order dapat diproses tanpa persetujuan customer.
                         @if($protectedCleanupCount > 0)
-                            {{ $protectedCleanupCount }} order yang sudah memiliki histori pembayaran akan dikeluarkan dari Batch, tetapi order, tagihan, dan pembayaran tetap tersimpan.
+                            {{ $protectedCleanupCount }} order membutuhkan persetujuan customer. Jika masih ada yang menunggu approval, Batch tidak akan dihapus.
                         @endif
                     </p>
                 </div>
-                <form method="post" action="{{ route('owner.batches.destroy',$batch) }}" data-confirm-title="Bersihkan & hapus Batch?" data-confirm="Batch {{ $batch->code }} akan dihapus. Order tanpa histori pembayaran akan dihapus permanen. Order berhistori pembayaran akan dilepas dari Batch tanpa menghapus tagihan atau pembayaran. Tracking publik Batch juga akan dihapus." data-loading-text="Menghapus Batch…" data-no-dirty-guard>
+                <form method="post" action="{{ route('owner.batches.destroy',$batch) }}" data-confirm-title="Bersihkan & hapus Batch?" data-confirm="Sistem akan memeriksa seluruh order. Jika ada order yang membutuhkan approval customer, permintaan akan dikirim dan Batch belum dihapus. Jika semuanya aman, Batch dan tracking terkait akan dibersihkan." data-loading-text="Menghapus Batch…" data-no-dirty-guard>
                     @csrf
                     @method('delete')
                     <button class="btn btn-danger" type="submit">Bersihkan &amp; Hapus Batch</button>

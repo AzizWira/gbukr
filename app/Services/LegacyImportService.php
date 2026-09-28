@@ -311,6 +311,8 @@ class LegacyImportService
                     $this->importPaymentInvoice($sheet, $row, $order, $user, $fingerprint, $oldFingerprint, $qty, $summary);
                 }
 
+                app(OrderImportSnapshotService::class)->storeBaseline($order->fresh());
+
                 if ($orderCreated) {
                     $summary['orders']++;
                 }

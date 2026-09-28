@@ -3,15 +3,19 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\SoftDeletes;
 
 class Order extends Model
 {
+    use SoftDeletes;
     protected $fillable = [
         'customer_id',
         'go_group_id',
         'preorder_id',
         'batch_id',
         'import_run_id',
+        'import_snapshot',
+        'imported_at',
         'source_type',
         'order_number',
         'status',
@@ -28,6 +32,8 @@ class Order extends Model
             'rate_snapshot' => 'decimal:4',
             'arrived_gbu_at' => 'datetime',
             'completed_at' => 'datetime',
+            'import_snapshot' => 'array',
+            'imported_at' => 'datetime',
         ];
     }
 
@@ -76,6 +82,12 @@ class Order extends Model
     public function adjustments()
     {
         return $this->hasMany(OrderAdjustment::class);
+    }
+
+
+    public function deletionRequests()
+    {
+        return $this->hasMany(OrderDeletionRequest::class);
     }
 
     public function hasFinancialHistory(): bool

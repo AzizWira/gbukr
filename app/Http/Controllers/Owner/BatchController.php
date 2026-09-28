@@ -119,32 +119,27 @@ class BatchController extends Controller
         return redirect()->route('owner.batches.show', $batch)->with('success', 'Data Batch berhasil diperbarui.');
     }
 
-    public function destroy(Batch $batch, OrderCleanupService $cleanup)
+    public function destroy(Request $request, Batch $batch, OrderCleanupService $cleanup)
     {
-        $orders = $batch->orders()->with(['invoices.payments', 'batch'])->get();
-        $deleted = 0;
-        $detached = 0;
-
-        DB::transaction(function () use ($batch, $orders, $cleanup, &$deleted, &$detached) {
-            foreach ($orders as $order) {
-                $result = $cleanup->cleanupFromBatch($order);
-                $result === 'deleted' ? $deleted++ : $detached++;
+        $orders=$batch->orders()->with(['customer.customerProfile','invoices.payments'])->get();
+        $needsApproval=$orders->filter(fn($order)=>$cleanup->policy($order)['action']==='approval_required');
+        if($needsApproval->isNotEmpty()){
+            foreach($needsApproval as $order){
+                $cleanup->processDeletion($order,$request->user(),'Penghapusan Batch '.$batch->code,'batch_cleanup');
             }
-
-            Shipment::where('source_type', 'batch')->where('source_id', $batch->id)->delete();
-            $batch->delete();
-        });
-
-        $message = 'Batch berhasil dihapus.';
-        if ($deleted > 0 || $detached > 0) {
-            $message .= ' ' . $deleted . ' order tanpa histori finansial dihapus permanen';
-            if ($detached > 0) {
-                $message .= ' dan ' . $detached . ' order berhistori pembayaran dikeluarkan dari Batch tanpa menghapus tagihan/pembayaran';
-            }
-            $message .= '.';
+            return back()->with('success',$needsApproval->count().' order memerlukan persetujuan customer. Permintaan sudah dikirim; Batch belum dihapus agar relasi tetap utuh sampai keputusan customer selesai.');
         }
 
-        return redirect()->route('owner.batches.index')->with('success', $message);
+        $deleted=0;
+        DB::transaction(function() use($request,$batch,$orders,$cleanup,&$deleted){
+            foreach($orders as $order){
+                $result=$cleanup->processDeletion($order,$request->user(),'Penghapusan Batch '.$batch->code,'batch_cleanup');
+                if($result['status']==='deleted') $deleted++;
+            }
+            Shipment::where('source_type','batch')->where('source_id',$batch->id)->delete();
+            $batch->delete();
+        });
+        return redirect()->route('owner.batches.index')->with('success','Batch berhasil dihapus. '.$deleted.' order terkait ikut dibersihkan sesuai aturan akun dan pembayaran.');
     }
 
     public function show(Batch $batch, BatchTrackingService $tracking, OrderCleanupService $cleanup)
@@ -289,33 +284,21 @@ class BatchController extends Controller
 
     public function destroyOrders(Request $request, Batch $batch, OrderCleanupService $cleanup, BatchTrackingService $tracking)
     {
-        $data = $request->validate([
-            'order_ids' => ['required', 'array', 'min:1', 'max:200'],
-            'order_ids.*' => ['integer'],
-        ], [
-            'order_ids.required' => 'Pilih minimal satu order yang akan dihapus.',
-        ]);
-
-        $orders = $batch->orders()->with('invoices.payments')->whereIn('id', $data['order_ids'])->get();
-        if ($orders->count() !== count(array_unique($data['order_ids']))) {
-            throw ValidationException::withMessages(['order_ids' => 'Ada order yang tidak berasal dari Batch ini.']);
+        $data=$request->validate([
+            'order_ids'=>['required','array','min:1','max:200'],
+            'order_ids.*'=>['integer'],
+        ],['order_ids.required'=>'Pilih minimal satu order yang akan diproses.']);
+        $orders=$batch->orders()->with(['customer.customerProfile','invoices.payments'])->whereIn('id',$data['order_ids'])->get();
+        if($orders->count()!==count(array_unique($data['order_ids']))) throw ValidationException::withMessages(['order_ids'=>'Ada order yang tidak berasal dari Batch ini.']);
+        $deleted=0; $pending=0;
+        foreach($orders as $order){
+            $result=$cleanup->processDeletion($order,$request->user(),'Cleanup order dari Batch '.$batch->code,'batch_cleanup');
+            $result['status']==='pending_approval' ? $pending++ : $deleted++;
         }
-
-        $deleted = 0;
-        $detached = 0;
-        foreach ($orders as $order) {
-            $result = $cleanup->cleanupFromBatch($order);
-            $result === 'deleted' ? $deleted++ : $detached++;
-        }
-
-        $tracking->sync($batch->fresh(['country', 'orders.items']));
-
-        $message = $deleted . ' order tanpa histori finansial dihapus permanen.';
-        if ($detached > 0) {
-            $message .= ' ' . $detached . ' order dengan histori pembayaran dikeluarkan dari Batch; order, tagihan, dan pembayaran tetap tersimpan.';
-        }
-
-        return back()->with('success', $message);
+        $tracking->sync($batch->fresh(['country','orders.items']));
+        $message=$deleted.' order berhasil dibersihkan.';
+        if($pending>0) $message.=' '.$pending.' order tetap berada di Batch sambil menunggu persetujuan customer.';
+        return back()->with('success',$message);
     }
 
     public function updateStatus(

@@ -619,4 +619,117 @@
     };
     if(!stopped) window.setTimeout(poll,1200);
   });
+
+
+  // v1.0.25: Cleanup import direview di modal scrollable dengan aksi Pilih semua. Data yang berubah tidak diblokir;
+  // Owner memilih satu per satu dan backend menentukan direct delete / notify / approval.
+  const cleanupDialog=q('#import-cleanup-dialog');
+  const cleanupForm=q('[data-import-cleanup-form]',cleanupDialog||document);
+  const cleanupBody=q('[data-cleanup-body]',cleanupDialog||document);
+  const cleanupTitle=q('[data-cleanup-title]',cleanupDialog||document);
+  const cleanupSubtitle=q('[data-cleanup-subtitle]',cleanupDialog||document);
+  const cleanupSearch=q('[data-cleanup-search]',cleanupDialog||document);
+  const cleanupFilter=q('[data-cleanup-filter]',cleanupDialog||document);
+  const cleanupReason=q('[data-cleanup-reason]',cleanupDialog||document);
+  const cleanupSelection=q('[data-cleanup-selection]',cleanupDialog||document);
+  const cleanupSelectAll=q('[data-cleanup-select-all]',cleanupDialog||document);
+  let cleanupReviewData=[];
+
+  const escapeHtml=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[char]));
+  const cleanupSelected=()=>qa('input[name="review_order_ids[]"]:checked',cleanupForm||document);
+  const syncCleanupSelection=()=>{
+    const selected=cleanupSelected();
+    const count=selected.length;
+    const all=qa('input[name="review_order_ids[]"]',cleanupForm||document);
+    if(cleanupSelection) cleanupSelection.textContent=`${count} dari ${all.length} data review dipilih`;
+    if(cleanupReason) cleanupReason.required=count>0;
+    if(cleanupSelectAll){
+      const allSelected=all.length>0 && count===all.length;
+      cleanupSelectAll.textContent=allSelected?'Batalkan pilih semua':'Pilih semua';
+      cleanupSelectAll.setAttribute('aria-pressed',allSelected?'true':'false');
+      cleanupSelectAll.disabled=all.length===0;
+    }
+    refreshRequiredMarks(cleanupForm||document);
+  };
+  const applyCleanupFilter=()=>{
+    const term=(cleanupSearch?.value||'').trim().toLowerCase();
+    const filter=cleanupFilter?.value||'all';
+    qa('[data-cleanup-row]',cleanupBody||document).forEach(row=>{
+      const text=(row.dataset.search||'').toLowerCase();
+      const matchesText=!term||text.includes(term);
+      const matchesFilter=filter==='all'
+        || (filter==='unlinked'&&row.dataset.linked==='0')
+        || (filter==='linked'&&row.dataset.linked==='1')
+        || (filter==='approved'&&row.dataset.payment==='approved')
+        || (filter==='pending_rejected'&&row.dataset.payment==='pending_rejected')
+        || (filter==='changed'&&row.dataset.changed==='1');
+      row.hidden=!(matchesText&&matchesFilter);
+    });
+  };
+
+  const renderCleanupReview=data=>{
+    if(!cleanupBody) return;
+    cleanupReviewData=data.review||[];
+    const safe=data.safe||[];
+    const safeExample=safe.slice(0,5).map(row=>`<div class="small">${escapeHtml(row.order_number)} · ${escapeHtml(row.customer)}</div>`).join('');
+    const rows=cleanupReviewData.map(row=>{
+      const reasons=(row.reasons||[]).map(reason=>`<li>${escapeHtml(reason)}</li>`).join('');
+      const linked=!!row.linked;
+      return `<label class="cleanup-review-item" data-cleanup-row data-search="${escapeHtml([row.order_number,row.customer,row.batch,row.items].join(' '))}" data-linked="${linked?'1':'0'}" data-payment="${escapeHtml(row.payment_state||'none')}" data-changed="${row.changed?'1':'0'}">
+        <input type="checkbox" name="review_order_ids[]" value="${Number(row.id)}">
+        <div>
+          <div class="cleanup-review-head"><div><strong>${escapeHtml(row.order_number)}</strong><div class="small muted">${escapeHtml(row.customer)} · Batch ${escapeHtml(row.batch)}</div></div><span class="badge ${row.action==='approval_required'?'warn':(linked?'ok':'gray')}">${escapeHtml(row.action_label)}</span></div>
+          <div class="cleanup-review-meta"><span class="badge gray">${escapeHtml(row.account_status)}</span><span class="badge gray">${escapeHtml(row.payment_status)}</span>${row.changed?'<span class="badge warn">Sudah berubah</span>':''}${row.new_activity?'<span class="badge warn">Aktivitas baru</span>':''}</div>
+          <div class="small muted" style="margin-top:7px">${escapeHtml(row.items)}</div>
+          ${reasons?`<ul class="cleanup-review-reasons">${reasons}</ul>`:''}
+        </div>
+      </label>`;
+    }).join('');
+    cleanupBody.innerHTML=`
+      <div class="cleanup-summary"><div class="cleanup-summary-card"><span class="small muted">Aman dibersihkan otomatis</span><strong>${Number(data.safe_count||0)}</strong></div><div class="cleanup-summary-card"><span class="small muted">Perlu ditinjau satu per satu</span><strong>${Number(data.review_count||0)}</strong></div><div class="cleanup-summary-card"><span class="small muted">Sudah dibersihkan sebelumnya</span><strong>${Number(data.already_deleted_count||0)}</strong></div></div>
+      ${safe.length?`<div class="cleanup-safe-list"><strong>Data aman</strong><div class="small muted">Belum terhubung akun, tidak berubah, tidak ada aktivitas baru, dan belum ada pembayaran. Data ini ikut dibersihkan otomatis.</div>${safeExample}${safe.length>5?`<div class="small muted">+ ${safe.length-5} data lainnya</div>`:''}</div>`:''}
+      <div class="section-head"><div><h3>Review manual</h3><p>Pilih satu per satu. Setiap data diproses sesuai status akun dan pembayaran yang tampil di bawah.</p></div></div>
+      <div class="cleanup-review-list">${rows||'<div class="empty">Tidak ada data yang memerlukan review manual.</div>'}</div>`;
+    qa('input[name="review_order_ids[]"]',cleanupBody).forEach(input=>input.addEventListener('change',syncCleanupSelection));
+    syncCleanupSelection();
+    applyCleanupFilter();
+  };
+
+  qa('[data-import-cleanup-open]').forEach(button=>button.addEventListener('click',async()=>{
+    if(!cleanupDialog||!cleanupForm||!cleanupBody) return;
+    cleanupForm.action=button.dataset.cleanupUrl||'';
+    if(cleanupTitle) cleanupTitle.textContent='Tinjau Data Sebelum Cleanup';
+    if(cleanupSubtitle) cleanupSubtitle.textContent=button.dataset.fileName||'';
+    if(cleanupReason){cleanupReason.value='';cleanupReason.required=false;}
+    if(cleanupSearch) cleanupSearch.value='';
+    if(cleanupFilter) cleanupFilter.value='all';
+    cleanupBody.innerHTML='<div class="empty">Memuat data hasil import…</div>';
+    cleanupDialog.showModal();
+    try{
+      const res=await fetch(button.dataset.reviewUrl,{headers:{'Accept':'application/json'}});
+      const data=await res.json();
+      if(!res.ok) throw new Error(data.message||'Data cleanup belum dapat dimuat.');
+      if(cleanupSubtitle) cleanupSubtitle.textContent=`${data.file||button.dataset.fileName||''} · ${data.safe_count||0} aman · ${data.review_count||0} perlu review`;
+      renderCleanupReview(data);
+    }catch(err){
+      cleanupBody.innerHTML=`<div class="alert error">${escapeHtml(err.message)}</div>`;
+    }
+  }));
+  cleanupSearch?.addEventListener('input',applyCleanupFilter);
+  cleanupFilter?.addEventListener('change',applyCleanupFilter);
+  cleanupSelectAll?.addEventListener('click',()=>{
+    const inputs=qa('input[name="review_order_ids[]"]',cleanupForm||document);
+    const shouldSelect=inputs.some(input=>!input.checked);
+    inputs.forEach(input=>{input.checked=shouldSelect;});
+    syncCleanupSelection();
+  });
+  cleanupForm?.addEventListener('submit',event=>{
+    const selected=cleanupSelected().length;
+    if(selected>0 && !cleanupReason?.value.trim()){
+      event.preventDefault(); event.stopImmediatePropagation();
+      cleanupReason.required=true; renderFieldError(cleanupReason); cleanupReason.focus();
+      showClientToast('Isi alasan cleanup untuk data yang dipilih manual.','error',6500);
+    }
+  },true);
+
 })();

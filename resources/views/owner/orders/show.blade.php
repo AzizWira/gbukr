@@ -121,32 +121,43 @@
     </div>
 
     <div class="card danger-zone" style="grid-column:1/-1">
-        <div>
+        <div style="width:100%">
             <div class="eyebrow">DATA LIFECYCLE</div>
-            @if($deleteBlocker && $order->batch_id)
-                <h3>Keluarkan order dari Batch</h3>
-                <p class="muted">{{ $deleteBlocker }} Order tidak akan dihapus, tetapi dapat dilepas dari Batch agar Batch bisa dibersihkan. Tagihan dan pembayaran tetap utuh.</p>
-            @elseif($deleteBlocker)
-                <h3>Order dilindungi histori</h3>
-                <p class="muted">{{ $deleteBlocker }} Karena order sudah tidak berada di Batch, histori ini dipertahankan sebagai audit trail.</p>
-            @else
-                <h3>Hapus order permanen</h3>
-                <p class="muted">Order ini belum memiliki histori pembayaran. Jika dihapus, item, tagihan yang belum dibayar, dan tagihan tambahan terkait ikut dibersihkan permanen.</p>
+            <h3>{{ $deletePolicy['action'] === 'approval_required' ? 'Ajukan penghapusan order' : 'Hapus order' }}</h3>
+            <p class="muted">
+                <strong>{{ $deletePolicy['account_label'] }}</strong> · {{ $deletePolicy['payment_label'] }}.
+                @if($deletePolicy['action'] === 'approval_required')
+                    Karena order sudah terhubung akun dan memiliki histori pembayaran, customer wajib menyetujui sebelum order dihapus.
+                @elseif($deletePolicy['action'] === 'delete_notify')
+                    Order dapat dihapus langsung dan customer akan menerima notifikasi penghapusan.
+                @elseif($deletePolicy['payment_state'] !== 'none')
+                    Akun belum terhubung sehingga persetujuan customer tidak dapat diminta. Order dapat dibersihkan oleh Owner; histori finansial tetap tersimpan di audit internal.
+                @else
+                    Order belum terhubung akun dan belum memiliki pembayaran sehingga dapat dihapus langsung setelah konfirmasi.
+                @endif
+            </p>
+
+            @if($latestDeletionRequest?->status === 'pending')
+                <div class="notice small" style="margin-top:14px">
+                    Permintaan penghapusan sudah dikirim ke customer pada {{ $latestDeletionRequest->requested_at?->translatedFormat('d F Y, H.i') }}. Order tetap aktif sampai customer menyetujui.
+                </div>
+            @elseif($latestDeletionRequest?->status === 'rejected')
+                <div class="alert error" style="margin-top:14px">Permintaan penghapusan terakhir ditolak customer.</div>
+            @endif
+
+            @if($latestDeletionRequest?->status !== 'pending')
+                <form method="post" action="{{ route('owner.orders.destroy',$order) }}" style="margin-top:16px" data-confirm-title="{{ $deletePolicy['action'] === 'approval_required' ? 'Kirim permintaan penghapusan?' : 'Hapus order?' }}" data-confirm="{{ $deletePolicy['action'] === 'approval_required' ? 'Customer akan menerima rincian order, tagihan, pembayaran, dan alasan penghapusan untuk disetujui atau ditolak.' : 'Order akan dihapus dari data operasional. Jika ada histori finansial pada akun yang belum terhubung, jejak audit internal tetap dipertahankan.' }}">
+                    @csrf
+                    @method('delete')
+                    <div class="field">
+                        <label>Alasan penghapusan</label>
+                        <textarea class="textarea" name="reason" maxlength="500" placeholder="Contoh: data duplikat hasil migrasi / salah input" @if($deletePolicy['action'] === 'approval_required' || $deletePolicy['payment_state'] !== 'none') required @endif></textarea>
+                        <div class="help">Alasan disimpan pada audit. Untuk penghapusan yang memerlukan approval, alasan ini juga terlihat oleh customer.</div>
+                    </div>
+                    <button class="btn btn-danger" type="submit" style="margin-top:12px">{{ $deletePolicy['action'] === 'approval_required' ? 'Kirim Permintaan Penghapusan' : 'Hapus Order' }}</button>
+                </form>
             @endif
         </div>
-        @if(!$deleteBlocker)
-            <form method="post" action="{{ route('owner.orders.destroy',$order) }}" data-confirm-title="Hapus order permanen?" data-confirm="Order {{ $order->order_number }}, item, tagihan yang belum pernah dibayar, serta tagihan tambahan terkait akan dihapus permanen. Tindakan ini tidak dapat dibatalkan.">
-                @csrf
-                @method('delete')
-                <button class="btn btn-danger" type="submit">Hapus order</button>
-            </form>
-        @elseif($order->batch_id)
-            <form method="post" action="{{ route('owner.orders.destroy',$order) }}" data-confirm-title="Keluarkan dari Batch?" data-confirm="Order {{ $order->order_number }} akan dilepas dari Batch. Order, tagihan, histori pembayaran, dan bukti pembayaran tidak dihapus. Tindakan ini digunakan untuk membersihkan relasi Batch tanpa merusak audit finansial.">
-                @csrf
-                @method('delete')
-                <button class="btn btn-danger" type="submit">Keluarkan dari Batch</button>
-            </form>
-        @endif
     </div>
 </div>
 @endsection

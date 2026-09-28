@@ -17,6 +17,15 @@
     <div class="metric kpi-accent"><span>Sisa tagihan</span><strong style="font-size:1.2rem">Rp{{ number_format($summary['outstanding'],0,',','.') }}</strong></div>
 </div>
 
+@if($deletionRequests->isNotEmpty())
+<div class="card" style="margin-bottom:18px;border-color:#f3c5cf">
+    <div class="section-head"><div><div class="eyebrow">PERLU TINDAKAN</div><h3>Persetujuan penghapusan order</h3><p>Owner meminta persetujuanmu sebelum menghapus order yang mempunyai histori pembayaran.</p></div><span class="badge warn">{{ $deletionRequests->count() }} menunggu</span></div>
+    @foreach($deletionRequests as $request)
+        <div class="summary-row"><div><strong>{{ $request->snapshot['order_number'] ?? 'Order' }}</strong><div class="small muted">{{ $request->reason ?: 'Tanpa alasan' }}</div></div><a class="btn btn-danger btn-sm" href="{{ route('customer.deletion-requests.show',$request) }}">Tinjau</a></div>
+    @endforeach
+</div>
+@endif
+
 <div class="quick-actions">
     <a class="quick-action" href="{{ route('customer.orders.index') }}">
         <strong>Lihat order</strong>

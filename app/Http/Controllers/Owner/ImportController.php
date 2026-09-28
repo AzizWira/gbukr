@@ -4,7 +4,7 @@ namespace App\Http\Controllers\Owner;
 
 use App\Http\Controllers\Controller;
 use App\Jobs\ProcessLegacyImport;
-use App\Models\{Batch, GoGroup, ImportRun, Order, Shipment};
+use App\Models\{Batch, GoGroup, ImportRun, Order, OrderDeletionRequest, Shipment};
 use App\Services\{LegacyImportService, OrderCleanupService};
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -249,74 +249,142 @@ class ImportController extends Controller
         return back()->with('success', 'Import ' . $run->original_name . ' dimasukkan kembali ke antrean. Data yang sudah sempat masuk akan diperbarui, bukan digandakan.');
     }
 
+    public function cleanupReview(Request $request, ImportRun $run, OrderCleanupService $cleanup)
+    {
+        abort_unless($request->user()->isOwner(), 403);
+        if (!in_array($run->status, ['completed', 'failed'], true)) {
+            return response()->json(['message'=>'Import yang masih berjalan atau sudah selesai dibersihkan tidak dapat direview.'], 422);
+        }
+
+        $orders = $this->ordersForRun($run)->with(['customer.customerProfile','items','invoices.payments','batch'])->get();
+        $safe=[]; $review=[];
+        foreach ($orders as $order) {
+            $state=$cleanup->importReview($order);
+            $row=$this->cleanupReviewRow($order,$state);
+            if ($state['auto_safe']) $safe[]=$row; else $review[]=$row;
+        }
+
+        return response()->json([
+            'run_id'=>$run->id,
+            'file'=>$run->original_name,
+            'safe_count'=>count($safe),
+            'review_count'=>count($review),
+            'already_deleted_count'=>OrderDeletionRequest::where('import_run_id',$run->id)->whereIn('status',['executed','approved'])->count(),
+            'safe'=>$safe,
+            'review'=>$review,
+        ]);
+    }
+
     public function cleanup(Request $request, ImportRun $run, OrderCleanupService $cleanup)
     {
         abort_unless($request->user()->isOwner(), 403);
-
         if (!in_array($run->status, ['completed', 'failed'], true)) {
-            return back()->withErrors(['import' => 'Import yang masih berjalan atau menunggu antrean tidak dapat dibersihkan.']);
+            return back()->withErrors(['import'=>'Import yang masih berjalan atau sudah selesai dibersihkan tidak dapat diproses.']);
         }
 
-        $ordersQuery = Order::with(['invoices.payments', 'batch'])
-            ->where('go_group_id', $run->go_group_id);
+        $data=$request->validate([
+            'review_order_ids'=>['nullable','array','max:500'],
+            'review_order_ids.*'=>['integer'],
+            'reason'=>['nullable','string','max:500'],
+        ]);
 
-        $ordersQuery->where(function ($query) use ($run) {
-            if (Schema::hasColumn('orders', 'import_run_id')) {
-                $query->where('import_run_id', $run->id)
-                    ->orWhere(function ($legacy) use ($run) {
-                        $legacy->whereNull('import_run_id')
-                            ->where('notes', 'like', 'Migrasi ' . $run->original_name . ' |%');
+        $orders=$this->ordersForRun($run)->with(['customer.customerProfile','items','invoices.payments','batch'])->get();
+        if ($orders->isEmpty()) {
+            $run->update(['status'=>'rolled_back']);
+            return back()->with('success','Tidak ada lagi data aktif dari import ini. Riwayat import ditandai sudah dibersihkan.');
+        }
+
+        $safe=collect(); $review=collect();
+        foreach($orders as $order){
+            $state=$cleanup->importReview($order);
+            if($state['auto_safe']) $safe->push($order); else $review->push($order);
+        }
+        $selectedIds=collect($data['review_order_ids'] ?? [])->map(fn($id)=>(int)$id)->unique();
+        $selected=$review->whereIn('id',$selectedIds);
+        if($selectedIds->count() !== $selected->count()) {
+            throw ValidationException::withMessages(['import'=>'Ada data pilihan yang bukan bagian dari review import ini. Muat ulang popup lalu coba lagi.']);
+        }
+        if($selected->isNotEmpty() && blank($data['reason'] ?? null)) {
+            throw ValidationException::withMessages(['reason'=>'Isi alasan cleanup untuk data yang ditinjau manual. Alasan akan masuk audit dan dapat ditampilkan ke customer bila approval diperlukan.']);
+        }
+        if($safe->isEmpty() && $selected->isEmpty()) {
+            throw ValidationException::withMessages(['import'=>'Tidak ada data aman yang dapat dibersihkan otomatis. Pilih minimal satu data pada daftar review manual.']);
+        }
+
+        $batchIds=$safe->concat($selected)->pluck('batch_id')->filter()->unique()->values();
+        $deleted=0; $approval=0; $notified=0;
+        foreach($safe as $order){
+            $result=$cleanup->processDeletion($order,$request->user(),'Cleanup otomatis hasil import '.$run->original_name,'import_cleanup',$run);
+            if($result['status']==='deleted') $deleted++;
+        }
+        foreach($selected as $order){
+            $result=$cleanup->processDeletion($order,$request->user(),$data['reason'] ?? null,'import_cleanup',$run);
+            if($result['status']==='pending_approval') $approval++;
+            else { $deleted++; if($result['policy']['linked']) $notified++; }
+        }
+
+        $removedBatches=0;
+        foreach(Batch::whereIn('id',$batchIds)->get() as $batch){
+            if(!$batch->orders()->exists() && str_contains($batch->code,'-LEG-')){
+                Shipment::where('source_type','batch')->where('source_id',$batch->id)->delete();
+                $batch->delete(); $removedBatches++;
+            }
+        }
+
+        $remaining=$this->ordersForRun($run)->count();
+        $summary=(array)$run->summary;
+        $summary['cleanup_deleted_orders']=($summary['cleanup_deleted_orders'] ?? 0)+$deleted;
+        $summary['cleanup_pending_approval']=$approval;
+        $summary['cleanup_notified_customers']=($summary['cleanup_notified_customers'] ?? 0)+$notified;
+        $summary['cleanup_batches']=($summary['cleanup_batches'] ?? 0)+$removedBatches;
+        $summary['cleanup_remaining_orders']=$remaining;
+        $run->update(['status'=>$remaining===0?'rolled_back':$run->status,'summary'=>$summary]);
+
+        $message=$deleted.' order berhasil dibersihkan.';
+        if($approval>0) $message.=' '.$approval.' order menunggu persetujuan customer dan belum dihapus.';
+        if($removedBatches>0) $message.=' '.$removedBatches.' Batch legacy kosong ikut dihapus.';
+        if($remaining>0) $message.=' Masih ada '.$remaining.' order yang perlu ditinjau/menunggu approval.';
+        return back()->with('success',$message);
+    }
+
+    private function ordersForRun(ImportRun $run)
+    {
+        $query=Order::where('go_group_id',$run->go_group_id);
+        return $query->where(function($query) use($run){
+            if(Schema::hasColumn('orders','import_run_id')){
+                $query->where('import_run_id',$run->id)
+                    ->orWhere(function($legacy) use($run){
+                        $legacy->whereNull('import_run_id')->where('notes','like','Migrasi '.$run->original_name.' |%');
                     });
             } else {
-                $query->where('notes', 'like', 'Migrasi ' . $run->original_name . ' |%');
+                $query->where('notes','like','Migrasi '.$run->original_name.' |%');
             }
         });
+    }
 
-        $orders = $ordersQuery->get();
-
-        if ($orders->isEmpty()) {
-            return back()->withErrors(['import' => 'Tidak ditemukan order yang masih terhubung dengan riwayat import ini.']);
-        }
-
-        $batchIds = $orders->pluck('batch_id')->filter()->unique()->values();
-        $deleted = 0;
-        $detached = 0;
-
-        foreach ($orders as $order) {
-            if ($cleanup->canDelete($order)) {
-                $cleanup->delete($order);
-                $deleted++;
-            } elseif ($order->batch_id) {
-                $cleanup->detachFromBatch($order);
-                $detached++;
-            }
-        }
-
-        $removedBatches = 0;
-        foreach (Batch::whereIn('id', $batchIds)->get() as $batch) {
-            if (!$batch->orders()->exists() && str_contains($batch->code, '-LEG-')) {
-                Shipment::where('source_type', 'batch')->where('source_id', $batch->id)->delete();
-                $batch->delete();
-                $removedBatches++;
-            }
-        }
-
-        $summary = (array) $run->summary;
-        $summary['cleanup_deleted_orders'] = $deleted;
-        $summary['cleanup_detached_orders'] = $detached;
-        $summary['cleanup_batches'] = $removedBatches;
-        $run->update(['status' => 'rolled_back', 'summary' => $summary]);
-
-        $message = 'Cleanup import selesai. ' . $deleted . ' order tanpa histori finansial dihapus permanen.';
-        if ($detached > 0) {
-            $message .= ' ' . $detached . ' order berhistori pembayaran dikeluarkan dari Batch, tetapi order/tagihan/pembayaran tetap tersimpan sebagai audit.';
-        }
-        if ($removedBatches > 0) {
-            $message .= ' ' . $removedBatches . ' Batch legacy kosong ikut dihapus.';
-        }
-        $message .= ' File sumber tetap disimpan.';
-
-        return back()->with('success', $message);
+    private function cleanupReviewRow(Order $order, array $state): array
+    {
+        $p=$state['policy'];
+        $reasons=$state['changes'];
+        if($state['new_activity']) $reasons[]='Terdapat aktivitas baru setelah import.';
+        if($p['linked']) $reasons[]='Data sudah terhubung ke akun customer.';
+        if($p['payment_state']!=='none') $reasons[]=$p['payment_label'].'.';
+        return [
+            'id'=>$order->id,
+            'order_number'=>$order->order_number,
+            'customer'=>$order->customer?->name ?: '-',
+            'account_status'=>$p['account_label'],
+            'linked'=>$p['linked'],
+            'payment_status'=>$p['payment_label'],
+            'payment_state'=>$p['payment_state'],
+            'action'=>$p['action'],
+            'action_label'=>$p['action_label'],
+            'batch'=>$order->batch?->code ?: '-',
+            'items'=>$order->items->pluck('item_name')->take(3)->join(', ') ?: '-',
+            'changed'=>!empty($state['changes']),
+            'new_activity'=>$state['new_activity'],
+            'reasons'=>array_values(array_unique($reasons)),
+        ];
     }
 
     private function markStaleRunsAsFailed(): void

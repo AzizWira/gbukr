@@ -548,3 +548,37 @@ button:disabled,.btn[disabled]{opacity:.62;cursor:not-allowed;transform:none!imp
 @media(max-width:900px){.nav-cart-popover{display:none!important}}
 .invoice-ledger-list{display:grid;gap:16px}.invoice-ledger-card{padding:0;overflow:hidden}.invoice-ledger-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:18px 20px;background:linear-gradient(135deg,#fff8fb,#f7fbff);border-bottom:1px solid var(--line)}.ledger-total{text-align:right;display:grid}.ledger-total strong{font-size:1.08rem}.ledger-rows{display:grid}.ledger-row{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:15px 20px;border-bottom:1px solid var(--line)}.ledger-row:last-child{border-bottom:0}.ledger-row-value{text-align:right;display:grid;justify-items:end;gap:3px}.sticky-payment-action{position:sticky;bottom:14px;z-index:20;margin-top:18px;padding:14px 16px;border:1px solid #dce7fb;border-radius:18px;background:rgba(255,255,255,.96);box-shadow:0 16px 44px rgba(55,71,105,.14);display:flex;justify-content:space-between;align-items:center;gap:14px;backdrop-filter:blur(10px)}
 @media(max-width:640px){.invoice-ledger-head,.ledger-row,.sticky-payment-action{align-items:flex-start;flex-direction:column}.ledger-total,.ledger-row-value{text-align:left;justify-items:start}.sticky-payment-action .btn{width:100%}}
+
+/* v1.0.25 — review cleanup import scrollable + kontrol Pilih semua. */
+.dialog-wide{width:min(980px,calc(100% - 28px));max-width:980px}
+.import-cleanup-dialog{max-height:88vh;overflow:hidden}
+.review-dialog-shell{display:flex;flex-direction:column;max-height:88vh;background:#fff}
+.review-dialog-header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:20px 22px 14px;border-bottom:1px solid var(--line);background:#fff;position:sticky;top:0;z-index:3}
+.review-dialog-header h3{margin:3px 0 4px}
+.review-dialog-tools{display:grid;grid-template-columns:minmax(0,1fr) 250px auto;gap:10px;padding:12px 22px;border-bottom:1px solid var(--line);background:#fff;position:sticky;top:0;z-index:2}
+.review-dialog-body{padding:16px 22px;overflow-y:auto;overscroll-behavior:contain;min-height:220px;max-height:54vh;background:#fbfcff}
+.review-dialog-footer{padding:14px 22px 18px;border-top:1px solid var(--line);background:#fff;position:sticky;bottom:0;z-index:3}
+.review-footer-actions{display:flex;align-items:center;justify-content:flex-end;gap:10px;flex-wrap:wrap;margin-top:12px}
+.review-reason-field{margin:0}
+.cleanup-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:14px}
+.cleanup-summary-card{padding:13px 14px;border:1px solid var(--line);border-radius:16px;background:#fff}
+.cleanup-summary-card strong{display:block;font-size:1.25rem;margin-top:3px}
+.cleanup-review-list{display:grid;gap:10px}
+.cleanup-review-item{display:grid;grid-template-columns:auto minmax(0,1fr);gap:12px;padding:14px;border:1px solid var(--line);border-radius:16px;background:#fff}
+.cleanup-review-item[hidden]{display:none}
+.cleanup-review-item input[type=checkbox]{margin-top:4px;width:18px;height:18px}
+.cleanup-review-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.cleanup-review-meta{display:flex;gap:7px;flex-wrap:wrap;margin-top:7px}
+.cleanup-review-reasons{margin:9px 0 0;padding-left:18px;color:var(--muted);font-size:.84rem;line-height:1.55}
+.cleanup-safe-list{margin:8px 0 16px;padding:12px 14px;border:1px dashed var(--line);border-radius:14px;background:#fff}
+@media(max-width:720px){
+  .dialog-wide{width:calc(100% - 16px)}
+  .import-cleanup-dialog,.review-dialog-shell{max-height:92vh}
+  .review-dialog-header,.review-dialog-tools,.review-dialog-body,.review-dialog-footer{padding-left:14px;padding-right:14px}
+  .review-dialog-tools{grid-template-columns:1fr;position:static}
+  .review-dialog-body{max-height:58vh}
+  .cleanup-summary{grid-template-columns:1fr}
+  .review-footer-actions{align-items:stretch}
+  .review-footer-actions .btn{flex:1}
+  .review-footer-actions [data-cleanup-selection]{width:100%}
+}

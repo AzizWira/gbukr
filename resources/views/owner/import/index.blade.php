@@ -129,11 +129,7 @@
                     </form>
                 @endif
                 @if(in_array($run->status,['completed','failed'],true))
-                    <form method="post" action="{{ route('owner.import.cleanup',$run) }}" data-confirm-title="Cleanup hasil import?" data-confirm="Order tanpa histori pembayaran akan dihapus. Order yang sudah memiliki histori pembayaran hanya akan dikeluarkan dari Batch agar tagihan dan pembayaran tetap tersimpan. Batch legacy yang kemudian kosong akan dihapus. File workbook asli tetap disimpan.">
-                        @csrf
-                        @method('delete')
-                        <button class="btn btn-danger btn-sm" type="submit">Cleanup hasil import</button>
-                    </form>
+                    <button class="btn btn-danger btn-sm" type="button" data-import-cleanup-open data-review-url="{{ route('owner.import.cleanup.review',$run) }}" data-cleanup-url="{{ route('owner.import.cleanup',$run) }}" data-file-name="{{ $run->original_name }}">Cleanup hasil import</button>
                 @elseif($run->status === 'rolled_back')
                     <span class="badge gray">Hasil import sudah dibersihkan</span>
                 @endif
@@ -143,6 +139,44 @@
         <div class="empty">Belum ada riwayat import.</div>
     @endforelse
 </div>
+
+<dialog id="import-cleanup-dialog" class="dialog dialog-wide import-cleanup-dialog">
+    <form method="post" class="review-dialog-shell" data-import-cleanup-form data-confirm-title="Proses cleanup import?" data-confirm="Data aman akan dibersihkan. Data review yang dipilih akan diproses sesuai status akun dan pembayaran masing-masing." data-no-dirty-guard>
+        @csrf
+        @method('delete')
+        <div class="review-dialog-header">
+            <div><div class="eyebrow">CLEANUP IMPORT</div><h3 data-cleanup-title>Tinjau Data Sebelum Cleanup</h3><p class="small muted" data-cleanup-subtitle>Memuat data…</p></div>
+            <button class="btn btn-neutral btn-sm" type="button" data-dialog-close>Tutup</button>
+        </div>
+        <div class="review-dialog-tools">
+            <input class="input" type="search" placeholder="Cari order / customer / batch" data-cleanup-search>
+            <select class="select" data-cleanup-filter>
+                <option value="all">Semua status</option>
+                <option value="unlinked">Belum terhubung akun</option>
+                <option value="linked">Sudah terhubung akun</option>
+                <option value="approved">Pembayaran approved</option>
+                <option value="pending_rejected">Payment pending/rejected</option>
+                <option value="changed">Sudah berubah</option>
+            </select>
+            <button class="btn btn-neutral" type="button" data-cleanup-select-all aria-pressed="false" title="Memilih seluruh data review, termasuk yang sedang tersembunyi oleh filter.">Pilih semua</button>
+        </div>
+        <div class="review-dialog-body" data-cleanup-body>
+            <div class="empty">Memuat data hasil import…</div>
+        </div>
+        <div class="review-dialog-footer">
+            <div class="field review-reason-field">
+                <label>Alasan cleanup data yang ditinjau manual</label>
+                <input class="input" name="reason" maxlength="500" placeholder="Contoh: data duplikat / salah mapping hasil migrasi" data-cleanup-reason>
+                <div class="help">Wajib jika memilih data review manual. Alasan disimpan pada audit dan dapat terlihat customer bila approval diperlukan.</div>
+            </div>
+            <div class="review-footer-actions">
+                <span class="small muted" data-cleanup-selection>0 data review dipilih</span>
+                <button class="btn btn-neutral" type="button" data-dialog-close>Batal</button>
+                <button class="btn btn-danger" type="submit" data-cleanup-submit>Proses Cleanup</button>
+            </div>
+        </div>
+    </form>
+</dialog>
 
 <div class="notice small" style="margin-top:18px">
     Importer mendukung STATUS BARANG serta TAGIHAN KR, CH, JP/JPN, THAI, PH, MY, SG, TW, USA, INA, dan TAGIHAN PO. Sheet lain seperti FREEBIES atau HANDCARRY tetap terlihat di preview tetapi tidak dipaksa masuk database sebelum aturan bisnisnya jelas. File workbook asli tetap disimpan sebagai arsip dan dapat diunduh kembali dari Riwayat import.

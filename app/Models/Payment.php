@@ -1,8 +1,10 @@
 <?php
 namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\SoftDeletes;
 class Payment extends Model
 {
+    use SoftDeletes;
     protected $fillable=['customer_id','bank_account_id','payment_number','amount','status','submitted_at','verified_at','verified_by','rejection_reason'];
     protected function casts():array{return ['submitted_at'=>'datetime','verified_at'=>'datetime'];}
     public function customer(){return $this->belongsTo(User::class,'customer_id');}
